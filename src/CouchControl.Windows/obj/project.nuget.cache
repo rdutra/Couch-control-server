@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "dgSpecHash": "NFRty6ou7+o=",
+  "success": true,
+  "projectFilePath": "/Users/rodrigodutra/dev/personal/game-mode-server/src/CouchControl.Windows/CouchControl.Windows.csproj",
+  "expectedPackageFiles": [
+    "/tmp/.nuget/packages/microsoft.extensions.dependencyinjection.abstractions/10.0.0/microsoft.extensions.dependencyinjection.abstractions.10.0.0.nupkg.sha512",
+    "/tmp/.nuget/packages/microsoft.extensions.logging.abstractions/10.0.0/microsoft.extensions.logging.abstractions.10.0.0.nupkg.sha512",
+    "/tmp/.nuget/packages/microsoft.net.illink.tasks/10.0.9/microsoft.net.illink.tasks.10.0.9.nupkg.sha512",
+    "/tmp/.nuget/packages/microsoft.netcore.app.runtime.win-x64/10.0.9/microsoft.netcore.app.runtime.win-x64.10.0.9.nupkg.sha512",
+    "/tmp/.nuget/packages/microsoft.aspnetcore.app.runtime.win-x64/10.0.9/microsoft.aspnetcore.app.runtime.win-x64.10.0.9.nupkg.sha512"
+  ],
+  "logs": []
+}
