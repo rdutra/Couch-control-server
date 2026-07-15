@@ -12,6 +12,11 @@ internal static class NativeMethods
     public const uint DISPLAYCONFIG_PATH_MODE_IDX_INVALID = 0xFFFFFFFF;
     public const uint ENUM_CURRENT_SETTINGS = 0xFFFFFFFF;
     public const uint ENUM_REGISTRY_SETTINGS = 0xFFFFFFFE;
+    public const uint DM_POSITION = 0x00000020;
+    public const uint DM_BITSPERPEL = 0x00040000;
+    public const uint DM_PELSWIDTH = 0x00080000;
+    public const uint DM_PELSHEIGHT = 0x00100000;
+    public const uint DM_DISPLAYFREQUENCY = 0x00400000;
 
     public const uint SDC_TOPOLOGY_INTERNAL = 0x00000001;
     public const uint SDC_TOPOLOGY_CLONE = 0x00000002;
@@ -29,6 +34,11 @@ internal static class NativeMethods
     public const uint SDC_ALLOW_PATH_ORDER_CHANGES = 0x00002000;
     public const uint SDC_VIRTUAL_MODE_AWARE = 0x00008000;
     public const uint SDC_VIRTUAL_REFRESH_RATE_AWARE = 0x00020000;
+    public const uint CDS_UPDATEREGISTRY = 0x00000001;
+    public const uint CDS_TEST = 0x00000002;
+    public const uint CDS_SET_PRIMARY = 0x00000010;
+    public const uint CDS_NORESET = 0x10000000;
+    public const int DISP_CHANGE_SUCCESSFUL = 0;
 
     [DllImport("user32.dll", SetLastError = true)]
     public static extern int GetDisplayConfigBufferSizes(
@@ -72,6 +82,22 @@ internal static class NativeMethods
         uint iModeNum,
         ref DEVMODE lpDevMode,
         uint dwFlags);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern int ChangeDisplaySettingsEx(
+        string? lpszDeviceName,
+        ref DEVMODE lpDevMode,
+        IntPtr hwnd,
+        uint dwflags,
+        IntPtr lParam);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern int ChangeDisplaySettingsEx(
+        string? lpszDeviceName,
+        IntPtr lpDevMode,
+        IntPtr hwnd,
+        uint dwflags,
+        IntPtr lParam);
 }
 
 [StructLayout(LayoutKind.Sequential)]

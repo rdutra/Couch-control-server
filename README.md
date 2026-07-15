@@ -8,14 +8,15 @@ The current couch-mode stage changes the active Windows display topology. Runnin
 
 ## Architecture
 
-The solution is split into four projects:
+The solution is split into five projects:
 
 - `src/CouchControl.Core`: platform-agnostic domain models, orchestration, result types, and interfaces.
-- `src/CouchControl.Windows`: future Windows-specific implementations for display switching, Steam launching, and persistence.
+- `src/CouchControl.Windows`: Windows-specific implementations for display switching, Steam launching, persistence, startup registration, and single-instance coordination.
 - `src/CouchControl.Cli`: the console host that wires dependency injection and logging together.
+- `src/CouchControl.Agent`: the WinForms tray agent for the interactive user session.
 - `tests/CouchControl.Core.Tests`: xUnit tests for the core domain and result semantics.
 
-The current foundation keeps the orchestration logic in `CouchControl.Core` so the rules around mode activation stay independent from the Windows APIs that will eventually execute those decisions.
+The orchestration logic stays in `CouchControl.Core` so the mode-switching rules remain independent from the Windows APIs that execute them.
 
 ## Why This Runs In The Interactive Session
 
@@ -27,7 +28,7 @@ Running in Session 0 would create the wrong execution model for this project:
 - Steam Big Picture is an interactive UI application and should launch in the signed-in user session.
 - Modern Windows isolates services from the desktop, which makes user-session display state and shell interaction significantly harder and less reliable.
 
-For that reason, CouchControl is planned as a user-session companion agent rather than a background service detached from the active desktop.
+For that reason, CouchControl runs as a user-session companion agent rather than a background service detached from the active desktop.
 
 ## Planned Stages
 
@@ -36,6 +37,99 @@ For that reason, CouchControl is planned as a user-session companion agent rathe
 3. Windows mode switching: activate the configured couch display as the only active output and restore the prior desktop snapshot.
 4. Steam integration: detect installation state, launch Big Picture mode, and handle already-running Steam cases.
 5. Persistence and operations: store configuration and snapshots, improve CLI commands, and add diagnostics and logging for real deployments.
+
+## Quickstart
+
+### 1. Build everything
+
+From the solution root:
+
+```bash
+dotnet build CouchControl.sln
+```
+
+### 2. Configure the target TV and preferred mode with the CLI
+
+List displays:
+
+```bash
+CouchControl.Cli configure list-displays
+```
+
+Save the TV:
+
+```bash
+CouchControl.Cli configure set-tv --display-id "f52d3a7e"
+```
+
+Set the preferred mode:
+
+```bash
+CouchControl.Cli configure set-mode --width 3840 --height 2160 --refresh-rate 60
+```
+
+Optionally control Steam auto-launch:
+
+```bash
+CouchControl.Cli configure set-steam --enabled true
+```
+
+Inspect the saved configuration:
+
+```bash
+CouchControl.Cli configure show
+```
+
+### 3. Validate couch mode once from the CLI
+
+Run a dry run before the first real switch on a machine or TV setup:
+
+```bash
+CouchControl.Cli couch --dry-run
+```
+
+Then perform the real switch:
+
+```bash
+CouchControl.Cli couch
+```
+
+Restore desktop mode on demand:
+
+```bash
+CouchControl.Cli desktop
+```
+
+### 4. Run the tray agent for day-to-day use
+
+After the initial configuration is in place, start `CouchControl.Agent.exe` in the logged-in user's Windows session. The tray menu provides:
+
+- `Activate Couch Mode`
+- `Restore Desktop Mode`
+- `Status`
+- `Settings`
+- `Show Configuration Folder`
+- `View Logs`
+- `Start with Windows`
+
+### 5. Publish Windows executables
+
+Both publish scripts now generate separate CLI and tray-agent outputs:
+
+- `artifacts/publish/cli-win-x64-fdd`
+- `artifacts/publish/cli-win-x64-sc`
+- `artifacts/publish/agent-win-x64-fdd`
+- `artifacts/publish/agent-win-x64-sc`
+
+Use either script from the repository root:
+
+```powershell
+./publish-windows.ps1
+```
+
+```bash
+./publish-windows.sh
+```
 
 ## CLI Usage
 
@@ -104,7 +198,7 @@ Couch display active
 
 Use this sequence for the first live test on the target PC:
 
-#### 1. Build the CLI
+#### 1. Build the solution
 
 From the solution root:
 
@@ -112,16 +206,18 @@ From the solution root:
 dotnet build CouchControl.sln
 ```
 
-The runnable CLI will be produced under:
+The runnable binaries will be produced under:
 
 ```text
 src\CouchControl.Cli\bin\Debug\net10.0\
+src\CouchControl.Agent\bin\Debug\net10.0-windows\
 ```
 
-On Windows, the command you will run is:
+On Windows, the CLI and tray agent executables are:
 
 ```powershell
-.\src\CouchControl.Cli\bin\Debug\net10.0\CouchControl.Cli.exe couch
+.\src\CouchControl.Cli\bin\Debug\net10.0\CouchControl.Cli.exe
+.\src\CouchControl.Agent\bin\Debug\net10.0-windows\CouchControl.Agent.exe
 ```
 
 #### 2. Confirm the TV is visible to Windows
@@ -213,11 +309,25 @@ The last captured desktop snapshot can be inspected with:
 
 This is useful when diagnosing why rollback or later desktop restore logic did or did not match the previous topology.
 
+#### 10. Start the tray agent
+
+Once the CLI configuration is correct, start the tray agent for normal usage:
+
+```powershell
+.\src\CouchControl.Agent\bin\Debug\net10.0-windows\CouchControl.Agent.exe
+```
+
+Expected behavior:
+
+- A notification-area icon appears for `Couch Control`.
+- Closing the status or settings window does not terminate the agent.
+- Starting a second instance reuses the existing tray process instead of creating another icon or host.
+- `Start with Windows` registers the agent for the current user without requiring elevation.
+
 ### Current Limitations For Live Testing
 
-- This stage implements `couch` activation only. There is not yet a CLI command that restores desktop mode on demand.
+- TV selection and preferred display mode are still configured through the CLI; the tray settings window currently exposes status, Steam auto-launch, and start-with-Windows behavior rather than full display selection.
 - Rollback is attempted automatically only when the switch or post-switch verification fails during the `couch` operation.
-- If the command succeeds but you want to return to your normal monitor layout, use normal Windows display settings for now.
 - Native integration tests are intentionally skipped by default because they would change active displays during a normal test run.
 
 When JSON output is requested, any diagnostic logging is redirected to standard error (`stderr`), keeping standard output (`stdout`) pure and directly parseable:

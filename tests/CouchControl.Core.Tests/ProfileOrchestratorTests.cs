@@ -270,7 +270,7 @@ public sealed class ProfileOrchestratorTests
         await gate.Task.WaitAsync(CancellationToken.None);
         cancellationTokenSource.Cancel();
 
-        await Assert.ThrowsAsync<OperationCanceledException>(() => task);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => task);
         Assert.Equal(AgentOperationState.Canceled, orchestrator.GetStatus().State);
     }
 

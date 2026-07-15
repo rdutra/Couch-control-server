@@ -111,9 +111,18 @@ public sealed class WindowsDisplayManagerEnumerationTests
             };
         }
 
-        return new QueryResult(paths, modes, definitions.ToDictionary(
-            static definition => (definition.AdapterId.LowPart, definition.TargetId),
-            static definition => (definition.FriendlyName, definition.DevicePath)));
+        return new QueryResult(
+            paths,
+            modes,
+            definitions
+                .GroupBy(static definition => (definition.AdapterId.LowPart, definition.TargetId))
+                .ToDictionary(
+                    static group => group.Key,
+                    static group =>
+                    {
+                        var definition = group.First();
+                        return (definition.FriendlyName, definition.DevicePath);
+                    }));
     }
 
     private static DisplayDefinition CreateDisplay(
@@ -200,6 +209,12 @@ public sealed class WindowsDisplayManagerEnumerationTests
 
         public bool EnumDisplaySettingsEx(string lpszDeviceName, uint iModeNum, ref DEVMODE lpDevMode, uint dwFlags) =>
             false;
+
+        public int ChangeDisplaySettingsEx(string lpszDeviceName, DEVMODE lpDevMode, uint dwFlags) =>
+            NativeMethods.DISP_CHANGE_SUCCESSFUL;
+
+        public int CommitDisplaySettings() =>
+            NativeMethods.DISP_CHANGE_SUCCESSFUL;
 
         public Task<int> RunDisplaySwitchExtendAsync(CancellationToken cancellationToken) =>
             Task.FromResult(0);

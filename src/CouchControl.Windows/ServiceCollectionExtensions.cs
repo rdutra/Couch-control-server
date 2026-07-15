@@ -9,6 +9,7 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddCouchControlWindows(this IServiceCollection services)
     {
+        services.AddSingleton(static _ => CouchControlPaths.CreateDefault());
         services.AddSingleton<IDisplayManager, WindowsDisplayManager>();
         services.AddSingleton<ISteamLauncher, WindowsSteamLauncher>();
         services.AddSingleton<IDisplaySnapshotStore, JsonDisplaySnapshotStore>();

@@ -1,4 +1,0 @@
-/Users/rodrigodutra/dev/personal/game-mode-server/artifacts/publish/win-x64-sc/CouchControl.Cli.pdb
-/Users/rodrigodutra/dev/personal/game-mode-server/artifacts/publish/win-x64-sc/CouchControl.Core.pdb
-/Users/rodrigodutra/dev/personal/game-mode-server/artifacts/publish/win-x64-sc/CouchControl.Windows.pdb
-/Users/rodrigodutra/dev/personal/game-mode-server/artifacts/publish/win-x64-sc/CouchControl.Cli.exe

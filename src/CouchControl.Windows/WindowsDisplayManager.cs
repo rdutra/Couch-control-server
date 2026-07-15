@@ -234,6 +234,7 @@ public sealed class WindowsDisplayManager : IDisplayManager
             var contexts = BuildDisplayContexts(currentConfiguration);
             var plan = BuildRestorePlan(snapshot, contexts);
             details.AddRange(plan.Details);
+            details.Add($"Selected baseline restore strategy: {DescribeRestoreStrategy(plan.Strategy)}");
 
             if (options.ForceFallback)
             {
@@ -246,42 +247,63 @@ public sealed class WindowsDisplayManager : IDisplayManager
                     cancellationToken);
             }
 
-            if (plan.ExactConfiguration is not null)
+            switch (plan.Strategy)
             {
-                var exactResult = await TryApplyRestoreConfigurationAsync(
-                    snapshot,
-                    plan,
-                    plan.ExactConfiguration.Value,
-                    RestoreAttemptKind.Exact,
-                    options.DryRun,
-                    details,
-                    cancellationToken);
-
-                if (exactResult.Succeeded)
+                case BaselineRestoreStrategy.SingleDisplayDeviceSettings:
                 {
-                    return exactResult;
+                    var singleDisplayResult = await TryRestoreSingleDisplayAsync(
+                        snapshot,
+                        plan,
+                        options.DryRun,
+                        details,
+                        cancellationToken);
+
+                    if (singleDisplayResult.Succeeded || options.DryRun)
+                    {
+                        return singleDisplayResult;
+                    }
+
+                    details = MergeDetails(details, singleDisplayResult.Details);
+                    break;
                 }
-
-                details = MergeDetails(details, exactResult.Details);
-            }
-
-            if (plan.BestEffortConfiguration is not null)
-            {
-                var bestEffortResult = await TryApplyRestoreConfigurationAsync(
-                    snapshot,
-                    plan,
-                    plan.BestEffortConfiguration.Value,
-                    RestoreAttemptKind.BestEffort,
-                    options.DryRun,
-                    details,
-                    cancellationToken);
-
-                if (bestEffortResult.Succeeded)
+                case BaselineRestoreStrategy.ExactNative:
                 {
-                    return bestEffortResult;
-                }
+                    var exactResult = await TryApplyRestoreConfigurationAsync(
+                        snapshot,
+                        plan,
+                        plan.ExactConfiguration!.Value,
+                        RestoreAttemptKind.Exact,
+                        options.DryRun,
+                        details,
+                        cancellationToken);
 
-                details = MergeDetails(details, bestEffortResult.Details);
+                    if (exactResult.Succeeded)
+                    {
+                        return exactResult;
+                    }
+
+                    details = MergeDetails(details, exactResult.Details);
+                    break;
+                }
+                case BaselineRestoreStrategy.BestEffortNative:
+                {
+                    var bestEffortResult = await TryApplyRestoreConfigurationAsync(
+                        snapshot,
+                        plan,
+                        plan.BestEffortConfiguration!.Value,
+                        RestoreAttemptKind.BestEffort,
+                        options.DryRun,
+                        details,
+                        cancellationToken);
+
+                    if (bestEffortResult.Succeeded)
+                    {
+                        return bestEffortResult;
+                    }
+
+                    details = MergeDetails(details, bestEffortResult.Details);
+                    break;
+                }
             }
 
             return await ExecuteFallbackRecoveryAsync(
@@ -307,7 +329,13 @@ public sealed class WindowsDisplayManager : IDisplayManager
         CancellationToken cancellationToken)
     {
         var details = new List<string>(seedDetails);
-        var label = attemptKind == RestoreAttemptKind.Exact ? "exact" : "best-effort";
+        var label = attemptKind switch
+        {
+            RestoreAttemptKind.SingleDisplayTopologyOnly => "topology-only single-display",
+            RestoreAttemptKind.SingleDisplayTopologyOnlyAfterFallback => "topology-only single-display after fallback",
+            RestoreAttemptKind.Exact => "exact",
+            _ => "best-effort"
+        };
         details.Add($"Attempting {label} native restoration");
 
         var validationResult = ApplyDisplayConfiguration(configuration, validateOnly: true);
@@ -327,15 +355,25 @@ public sealed class WindowsDisplayManager : IDisplayManager
         if (dryRun)
         {
             details.Add($"Dry run validated the {label} restoration path");
-            return attemptKind == RestoreAttemptKind.Exact
-                ? OperationResult.Success(
+            return attemptKind switch
+            {
+                RestoreAttemptKind.Exact => OperationResult.Success(
                     $"Dry run validated exact restoration of desktop snapshot {snapshot.SnapshotId}.",
                     outcome: "exact",
-                    details: details)
-                : OperationResult.PartialSuccess(
+                    details: details),
+                RestoreAttemptKind.SingleDisplayTopologyOnly => OperationResult.Success(
+                    $"Dry run validated topology-only single-display restoration of desktop snapshot {snapshot.SnapshotId}.",
+                    outcome: "single_display_topology_only",
+                    details: details),
+                RestoreAttemptKind.SingleDisplayTopologyOnlyAfterFallback => OperationResult.Success(
+                    $"Dry run validated topology-only single-display restoration after emergency fallback for desktop snapshot {snapshot.SnapshotId}.",
+                    outcome: "single_display_topology_only_after_fallback",
+                    details: details),
+                _ => OperationResult.PartialSuccess(
                     $"Dry run validated best-effort restoration of desktop snapshot {snapshot.SnapshotId}.",
                     outcome: "best_effort",
-                    details: details);
+                    details: details)
+            };
         }
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -369,15 +407,64 @@ public sealed class WindowsDisplayManager : IDisplayManager
                 verification.Message);
         }
 
-        return attemptKind == RestoreAttemptKind.Exact
-            ? OperationResult.Success(
+        return attemptKind switch
+        {
+            RestoreAttemptKind.Exact => OperationResult.Success(
                 "Desktop Mode restored",
                 outcome: "exact",
-                details: details)
-            : OperationResult.PartialSuccess(
+                details: details),
+            RestoreAttemptKind.SingleDisplayTopologyOnly => OperationResult.Success(
+                "Desktop Mode restored",
+                outcome: "single_display_topology_only",
+                details: details),
+            RestoreAttemptKind.SingleDisplayTopologyOnlyAfterFallback => OperationResult.Success(
+                "Desktop Mode restored after topology-only emergency fallback recovery",
+                outcome: "single_display_topology_only_after_fallback",
+                details: details),
+            _ => OperationResult.PartialSuccess(
                 "Desktop Mode restored with best-effort topology",
                 outcome: "best_effort",
-                details: details);
+                details: details)
+        };
+    }
+
+    private async Task<OperationResult> TryRestoreSingleDisplayAsync(
+        DisplaySnapshot snapshot,
+        RestorePlan plan,
+        bool dryRun,
+        List<string> seedDetails,
+        CancellationToken cancellationToken)
+    {
+        var details = new List<string>(seedDetails)
+        {
+            "Attempting explicit single-display restore"
+        };
+
+        var targetMatch = plan.Matches[0];
+        var currentContexts = BuildDisplayContexts(QueryDisplayConfiguration(NativeMethods.QDC_ALL_PATHS));
+        var currentByIdentifier = currentContexts.ToDictionary(context => context.Identifier, context => context);
+        var targetContext = currentByIdentifier.TryGetValue(targetMatch.Context.Identifier, out var refreshedTarget)
+            ? refreshedTarget
+            : targetMatch.Context;
+
+        var result = TryApplySingleDisplayDeviceSettings(currentContexts, targetContext, targetMatch.SnapshotPath, dryRun, details);
+        if (result.Succeeded || dryRun)
+        {
+            return OperationResult.Success(
+                result.Message,
+                outcome: result.Outcome,
+                details: result.Details);
+        }
+
+        return await RecoverAfterFailedRestoreAttemptAsync(
+            snapshot,
+            plan,
+            dryRun,
+            result.Details.ToList(),
+            null,
+            result.ErrorCode ?? "single_display_explicit_failed",
+            cancellationToken,
+            result.Message);
     }
 
     private async Task<OperationResult> RecoverAfterFailedRestoreAttemptAsync(
@@ -427,7 +514,24 @@ public sealed class WindowsDisplayManager : IDisplayManager
         var fallbackExitCode = await _displaySystem.RunDisplaySwitchExtendAsync(cancellationToken);
         details.Add($"DisplaySwitch.exe exited with code {fallbackExitCode}");
 
-        var activeAfterFallback = BuildDisplayContexts(QueryDisplayConfiguration(NativeMethods.QDC_ALL_PATHS));
+        var activeAfterFallback = BuildDisplayContexts(QueryDisplayConfiguration(NativeMethods.QDC_ONLY_ACTIVE_PATHS));
+        var singleDisplayRecoveryResult = await TryRestoreSingleDisplayAfterFallbackAsync(
+            snapshot,
+            activeAfterFallback,
+            details,
+            cancellationToken);
+
+        if (singleDisplayRecoveryResult is not null)
+        {
+            if (singleDisplayRecoveryResult.Succeeded)
+            {
+                return singleDisplayRecoveryResult;
+            }
+
+            details = MergeDetails(details, singleDisplayRecoveryResult.Details);
+            activeAfterFallback = BuildDisplayContexts(QueryDisplayConfiguration(NativeMethods.QDC_ONLY_ACTIVE_PATHS));
+        }
+
         if (activeAfterFallback.Any(static context => context.IsActive))
         {
             details.Add("Emergency fallback left at least one display active");
@@ -439,7 +543,7 @@ public sealed class WindowsDisplayManager : IDisplayManager
 
         details.Add("Emergency fallback did not activate any displays");
         details = await EnsureAnyDisplayActiveAfterFailureAsync(
-            new RestorePlan(null, null, [], [], []),
+            new RestorePlan(BaselineRestoreStrategy.BestEffortNative, null, null, [], [], []),
             details,
             cancellationToken);
 
@@ -458,6 +562,54 @@ public sealed class WindowsDisplayManager : IDisplayManager
             "display_restore_fallback_failed",
             outcome: "fallback_failed",
             details: details);
+    }
+
+    private async Task<OperationResult?> TryRestoreSingleDisplayAfterFallbackAsync(
+        DisplaySnapshot snapshot,
+        IReadOnlyList<DisplayPathContext> activeAfterFallback,
+        List<string> seedDetails,
+        CancellationToken cancellationToken)
+    {
+        if (snapshot.Paths.Count(static path => path.IsActive) != 1)
+        {
+            return null;
+        }
+
+        var plan = BuildRestorePlan(snapshot, activeAfterFallback);
+        if (plan.Strategy != BaselineRestoreStrategy.SingleDisplayDeviceSettings || plan.Matches.Count != 1)
+        {
+            return null;
+        }
+
+        var details = new List<string>(seedDetails)
+        {
+            "Attempting explicit single-display restoration after emergency fallback"
+        };
+
+        var result = TryApplySingleDisplayDeviceSettings(
+            activeAfterFallback,
+            plan.Matches[0].Context,
+            plan.Matches[0].SnapshotPath,
+            dryRun: false,
+            details);
+
+        if (result.Succeeded)
+        {
+            return OperationResult.Success(
+                result.Message,
+                outcome: result.Outcome,
+                details: result.Details);
+        }
+
+        return await RecoverAfterFailedRestoreAttemptAsync(
+            snapshot,
+            plan,
+            dryRun: false,
+            result.Details.ToList(),
+            null,
+            result.ErrorCode ?? "single_display_explicit_after_fallback_failed",
+            cancellationToken,
+            result.Message);
     }
 
     private async Task<List<string>> EnsureAnyDisplayActiveAfterFailureAsync(
@@ -509,6 +661,166 @@ public sealed class WindowsDisplayManager : IDisplayManager
         return details;
     }
 
+    private DeviceSettingsRestoreResult TryApplySingleDisplayDeviceSettings(
+        IReadOnlyList<DisplayPathContext> contexts,
+        DisplayPathContext targetContext,
+        DisplayPathSnapshot snapshotPath,
+        bool dryRun,
+        List<string> seedDetails)
+    {
+        var details = new List<string>(seedDetails);
+        if (string.IsNullOrWhiteSpace(targetContext.SourceDeviceName))
+        {
+            details.Add($"Windows did not expose a source device name for '{targetContext.FriendlyName}'");
+            return DeviceSettingsRestoreResult.Failure(
+                $"Desktop snapshot could not be restored because '{targetContext.FriendlyName}' has no source device name.",
+                "single_display_source_name_unavailable",
+                details);
+        }
+
+        if (!TryBuildEnabledDisplaySettings(targetContext, snapshotPath, out var targetMode, out var targetBuildError))
+        {
+            details.Add(targetBuildError);
+            return DeviceSettingsRestoreResult.Failure(
+                $"Desktop snapshot could not be restored because '{targetContext.FriendlyName}' could not be configured.",
+                "single_display_target_mode_unavailable",
+                details);
+        }
+
+        var uniqueSourceNames = contexts
+            .Where(static context => !string.IsNullOrWhiteSpace(context.SourceDeviceName))
+            .GroupBy(context => context.SourceDeviceName!, StringComparer.OrdinalIgnoreCase)
+            .Select(static group => group.First())
+            .ToArray();
+
+        foreach (var context in uniqueSourceNames.Where(context =>
+                     !StringComparer.OrdinalIgnoreCase.Equals(context.SourceDeviceName, targetContext.SourceDeviceName)))
+        {
+            var detachMode = CreateDetachedDisplayMode();
+            details.Add($"Detaching {context.FriendlyName}");
+
+            var detachResult = _displaySystem.ChangeDisplaySettingsEx(
+                context.SourceDeviceName!,
+                detachMode,
+                NativeMethods.CDS_UPDATEREGISTRY | NativeMethods.CDS_NORESET);
+
+            if (detachResult != NativeMethods.DISP_CHANGE_SUCCESSFUL)
+            {
+                details.Add($"Detaching {context.FriendlyName} failed with error {detachResult}");
+                return DeviceSettingsRestoreResult.Failure(
+                    $"Desktop snapshot could not be restored while detaching '{context.FriendlyName}'.",
+                    "single_display_detach_failed",
+                    details);
+            }
+        }
+
+        details.Add($"Configuring {targetContext.FriendlyName} as primary display");
+        var targetFlags = NativeMethods.CDS_UPDATEREGISTRY | NativeMethods.CDS_NORESET | NativeMethods.CDS_SET_PRIMARY;
+        var targetResult = _displaySystem.ChangeDisplaySettingsEx(targetContext.SourceDeviceName!, targetMode, targetFlags);
+        if (targetResult != NativeMethods.DISP_CHANGE_SUCCESSFUL)
+        {
+            details.Add($"Configuring {targetContext.FriendlyName} failed with error {targetResult}");
+            return DeviceSettingsRestoreResult.Failure(
+                $"Desktop snapshot could not be restored while configuring '{targetContext.FriendlyName}'.",
+                "single_display_target_apply_failed",
+                details);
+        }
+
+        if (dryRun)
+        {
+            details.Add("Dry run planned explicit single-display restore");
+            return DeviceSettingsRestoreResult.Success(
+                $"Dry run validated explicit single-display restoration of desktop snapshot.",
+                "single_display_device_settings",
+                details);
+        }
+
+        var commitResult = _displaySystem.CommitDisplaySettings();
+        if (commitResult != NativeMethods.DISP_CHANGE_SUCCESSFUL)
+        {
+            details.Add($"Committing explicit single-display restore failed with error {commitResult}");
+            return DeviceSettingsRestoreResult.Failure(
+                "Desktop snapshot could not be restored while committing the explicit single-display restore.",
+                "single_display_commit_failed",
+                details);
+        }
+
+        var verification = VerifySingleActiveDisplay(targetContext.Identifier);
+        details.Add(verification.Message ?? $"Verified '{targetContext.FriendlyName}' as the only active display.");
+        if (!verification.Succeeded)
+        {
+            return DeviceSettingsRestoreResult.Failure(
+                verification.Message ?? $"Verification failed for '{targetContext.FriendlyName}'.",
+                verification.ErrorCode ?? "single_display_verification_failed",
+                details);
+        }
+
+        return DeviceSettingsRestoreResult.Success(
+            "Desktop Mode restored",
+            "single_display_device_settings",
+            details);
+    }
+
+    private bool TryBuildEnabledDisplaySettings(
+        DisplayPathContext targetContext,
+        DisplayPathSnapshot snapshotPath,
+        out DEVMODE mode,
+        out string error)
+    {
+        mode = new DEVMODE
+        {
+            dmSize = (ushort)Marshal.SizeOf<DEVMODE>()
+        };
+
+        error = string.Empty;
+        var sourceName = targetContext.SourceDeviceName!;
+        if (!_displaySystem.EnumDisplaySettingsEx(sourceName, NativeMethods.ENUM_CURRENT_SETTINGS, ref mode, 0))
+        {
+            mode = new DEVMODE
+            {
+                dmSize = (ushort)Marshal.SizeOf<DEVMODE>()
+            };
+        }
+
+        var width = snapshotPath.SourceMode?.Width ?? mode.dmPelsWidth;
+        var height = snapshotPath.SourceMode?.Height ?? mode.dmPelsHeight;
+        if (width == 0 || height == 0)
+        {
+            error = $"No usable mode information was available for '{targetContext.FriendlyName}'.";
+            return false;
+        }
+
+        mode.dmPelsWidth = width;
+        mode.dmPelsHeight = height;
+        mode.dmPositionX = snapshotPath.SourceMode?.Position.X ?? 0;
+        mode.dmPositionY = snapshotPath.SourceMode?.Position.Y ?? 0;
+        mode.dmFields = NativeMethods.DM_POSITION | NativeMethods.DM_PELSWIDTH | NativeMethods.DM_PELSHEIGHT;
+
+        if (mode.dmBitsPerPel != 0)
+        {
+            mode.dmFields |= NativeMethods.DM_BITSPERPEL;
+        }
+
+        if (snapshotPath.RefreshRate.Hertz > 0)
+        {
+            mode.dmDisplayFrequency = (uint)Math.Round(snapshotPath.RefreshRate.Hertz, MidpointRounding.AwayFromZero);
+            mode.dmFields |= NativeMethods.DM_DISPLAYFREQUENCY;
+        }
+
+        return true;
+    }
+
+    private static DEVMODE CreateDetachedDisplayMode() =>
+        new()
+        {
+            dmSize = (ushort)Marshal.SizeOf<DEVMODE>(),
+            dmPelsWidth = 0,
+            dmPelsHeight = 0,
+            dmPositionX = 0,
+            dmPositionY = 0,
+            dmFields = NativeMethods.DM_POSITION | NativeMethods.DM_PELSWIDTH | NativeMethods.DM_PELSHEIGHT
+        };
+
     private RestoreVerificationResult VerifyRestoredTopology(
         DisplaySnapshot snapshot,
         RestorePlan plan,
@@ -544,7 +856,9 @@ public sealed class WindowsDisplayManager : IDisplayManager
 
             verificationDetails.Add($"Verified {match.Context.FriendlyName}");
 
-            if (attemptKind != RestoreAttemptKind.Exact || match.SnapshotPath.SourceMode is null || restored.SourceMode is null)
+            if ((attemptKind is not RestoreAttemptKind.Exact and not RestoreAttemptKind.SingleDisplayTopologyOnly and not RestoreAttemptKind.SingleDisplayTopologyOnlyAfterFallback) ||
+                match.SnapshotPath.SourceMode is null ||
+                restored.SourceMode is null)
             {
                 continue;
             }
@@ -560,7 +874,10 @@ public sealed class WindowsDisplayManager : IDisplayManager
         }
 
         var expectedActiveCount = snapshot.Paths.Count(static path => path.IsActive);
-        if (attemptKind == RestoreAttemptKind.Exact && currentPaths.Length != expectedActiveCount)
+        if ((attemptKind == RestoreAttemptKind.Exact ||
+             attemptKind == RestoreAttemptKind.SingleDisplayTopologyOnly ||
+             attemptKind == RestoreAttemptKind.SingleDisplayTopologyOnlyAfterFallback) &&
+            currentPaths.Length != expectedActiveCount)
         {
             return RestoreVerificationResult.Failure(
                 $"Verification failed: expected {expectedActiveCount} active displays but found {currentPaths.Length}.",
@@ -618,8 +935,29 @@ public sealed class WindowsDisplayManager : IDisplayManager
             ? BuildBestEffortRestoreConfiguration(matches)
             : null;
 
-        return new RestorePlan(exact, bestEffort, matches, missing, details);
+        var strategy = DetermineRestoreStrategy(snapshot, matches, missing, exact, bestEffort);
+        return new RestorePlan(strategy, exact, bestEffort, matches, missing, details);
     }
+
+    private static BaselineRestoreStrategy DetermineRestoreStrategy(
+        DisplaySnapshot snapshot,
+        IReadOnlyList<RestoreMatch> matches,
+        IReadOnlyList<DisplayPathSnapshot> missing,
+        (DISPLAYCONFIG_PATH_INFO[] Paths, DISPLAYCONFIG_MODE_INFO[] Modes)? exactConfiguration,
+        (DISPLAYCONFIG_PATH_INFO[] Paths, DISPLAYCONFIG_MODE_INFO[] Modes)? bestEffortConfiguration) =>
+        snapshot.Paths.Count(static path => path.IsActive) == 1 && matches.Count == 1
+            ? BaselineRestoreStrategy.SingleDisplayDeviceSettings
+            : exactConfiguration is not null && missing.Count == 0
+                ? BaselineRestoreStrategy.ExactNative
+                : BaselineRestoreStrategy.BestEffortNative;
+
+    private static string DescribeRestoreStrategy(BaselineRestoreStrategy strategy) =>
+        strategy switch
+        {
+            BaselineRestoreStrategy.SingleDisplayDeviceSettings => "explicit single-display baseline",
+            BaselineRestoreStrategy.ExactNative => "native exact snapshot replay",
+            _ => "native best-effort snapshot replay"
+        };
 
     private DisplayPathContext? MatchSnapshotPath(
         DisplayPathSnapshot snapshotPath,
@@ -769,6 +1107,18 @@ public sealed class WindowsDisplayManager : IDisplayManager
         }
 
         return null;
+    }
+
+    private static (DISPLAYCONFIG_PATH_INFO[] Paths, DISPLAYCONFIG_MODE_INFO[] Modes) BuildSingleDisplayTopologyOnlyConfiguration(
+        DisplayPathContext context)
+    {
+        var path = context.Path;
+        path.flags = NativeMethods.DISPLAYCONFIG_PATH_ACTIVE;
+        path.sourceInfo.modeInfoIdx = NativeMethods.DISPLAYCONFIG_PATH_MODE_IDX_INVALID;
+        path.targetInfo.modeInfoIdx = NativeMethods.DISPLAYCONFIG_PATH_MODE_IDX_INVALID;
+        path.targetInfo.targetAvailable = 1;
+
+        return ([path], []);
     }
 
     private (DISPLAYCONFIG_PATH_INFO[] Paths, DISPLAYCONFIG_MODE_INFO[] Modes)? BuildSafeModeConfiguration(DisplayPathContext context)
@@ -1544,7 +1894,15 @@ public sealed class WindowsDisplayManager : IDisplayManager
                 decimal.Round(obj.TargetMode.RefreshRateHz, 2));
     }
 
+    private enum BaselineRestoreStrategy
+    {
+        SingleDisplayDeviceSettings,
+        ExactNative,
+        BestEffortNative
+    }
+
     private sealed record RestorePlan(
+        BaselineRestoreStrategy Strategy,
         (DISPLAYCONFIG_PATH_INFO[] Paths, DISPLAYCONFIG_MODE_INFO[] Modes)? ExactConfiguration,
         (DISPLAYCONFIG_PATH_INFO[] Paths, DISPLAYCONFIG_MODE_INFO[] Modes)? BestEffortConfiguration,
         IReadOnlyList<RestoreMatch> Matches,
@@ -1557,6 +1915,8 @@ public sealed class WindowsDisplayManager : IDisplayManager
 
     private enum RestoreAttemptKind
     {
+        SingleDisplayTopologyOnly,
+        SingleDisplayTopologyOnlyAfterFallback,
         Exact,
         BestEffort
     }
@@ -1588,6 +1948,20 @@ public sealed class WindowsDisplayManager : IDisplayManager
             new(false, message, errorCode, null, null);
     }
 
+    private sealed record DeviceSettingsRestoreResult(
+        bool Succeeded,
+        string Message,
+        string? ErrorCode,
+        string Outcome,
+        IReadOnlyList<string> Details)
+    {
+        public static DeviceSettingsRestoreResult Success(string message, string outcome, IReadOnlyList<string> details) =>
+            new(true, message, null, outcome, details);
+
+        public static DeviceSettingsRestoreResult Failure(string message, string errorCode, IReadOnlyList<string> details) =>
+            new(false, message, errorCode, "native_failed", details);
+    }
+
     internal interface IWindowsDisplaySystem
     {
         int GetDisplayConfigBufferSizes(uint flags, out uint numPathArrayElements, out uint numModeInfoArrayElements);
@@ -1614,6 +1988,10 @@ public sealed class WindowsDisplayManager : IDisplayManager
             uint flags);
 
         bool EnumDisplaySettingsEx(string lpszDeviceName, uint iModeNum, ref DEVMODE lpDevMode, uint dwFlags);
+
+        int ChangeDisplaySettingsEx(string lpszDeviceName, DEVMODE lpDevMode, uint dwFlags);
+
+        int CommitDisplaySettings();
 
         Task<int> RunDisplaySwitchExtendAsync(CancellationToken cancellationToken);
     }
@@ -1651,6 +2029,12 @@ public sealed class WindowsDisplayManager : IDisplayManager
 
         public bool EnumDisplaySettingsEx(string lpszDeviceName, uint iModeNum, ref DEVMODE lpDevMode, uint dwFlags) =>
             NativeMethods.EnumDisplaySettingsEx(lpszDeviceName, iModeNum, ref lpDevMode, dwFlags);
+
+        public int ChangeDisplaySettingsEx(string lpszDeviceName, DEVMODE lpDevMode, uint dwFlags) =>
+            NativeMethods.ChangeDisplaySettingsEx(lpszDeviceName, ref lpDevMode, IntPtr.Zero, dwFlags, IntPtr.Zero);
+
+        public int CommitDisplaySettings() =>
+            NativeMethods.ChangeDisplaySettingsEx(null, IntPtr.Zero, IntPtr.Zero, 0, IntPtr.Zero);
 
         public async Task<int> RunDisplaySwitchExtendAsync(CancellationToken cancellationToken)
         {
