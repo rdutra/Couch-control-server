@@ -87,6 +87,10 @@ public sealed class JsonAgentConfigurationStore : IAgentConfigurationStore
 
         public string? SteamExecutablePath { get; init; }
 
+        public int ApiPort { get; init; } = 47981;
+
+        public string[] CorsAllowedOrigins { get; init; } = [];
+
         public AgentConfiguration ToDomain()
         {
             return new AgentConfiguration
@@ -99,7 +103,12 @@ public sealed class JsonAgentConfigurationStore : IAgentConfigurationStore
                 PreferredCouchHeight = PreferredCouchMode.Height,
                 PreferredCouchRefreshRateHz = PreferredCouchMode.RefreshRateHz,
                 LaunchSteamAutomatically = LaunchSteamAutomatically,
-                SteamExecutablePath = SteamExecutablePath
+                SteamExecutablePath = SteamExecutablePath,
+                ApiPort = ApiPort is >= 1 and <= 65535 ? ApiPort : 47981,
+                CorsAllowedOrigins = CorsAllowedOrigins
+                    .Where(static origin => !string.IsNullOrWhiteSpace(origin))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray()
             };
         }
 
@@ -113,7 +122,12 @@ public sealed class JsonAgentConfigurationStore : IAgentConfigurationStore
                 CouchDisplay = PersistedCouchDisplayIdentity.FromDomain(configuration.CouchDisplayIdentity),
                 PreferredCouchMode = PersistedDisplayMode.FromDomain(configuration.PreferredCouchMode),
                 LaunchSteamAutomatically = configuration.LaunchSteamAutomatically,
-                SteamExecutablePath = configuration.SteamExecutablePath
+                SteamExecutablePath = configuration.SteamExecutablePath,
+                ApiPort = configuration.ApiPort,
+                CorsAllowedOrigins = configuration.CorsAllowedOrigins
+                    .Where(static origin => !string.IsNullOrWhiteSpace(origin))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray()
             };
         }
 

@@ -6,6 +6,7 @@ using CouchControl.Agent.Status;
 using CouchControl.Core.Abstractions;
 using CouchControl.Core.Models;
 using CouchControl.Windows;
+using CouchControl.Windows.AgentApi;
 using CouchControl.Windows.Runtime;
 using CouchControl.Windows.Startup;
 using Microsoft.Extensions.Logging;
@@ -22,7 +23,7 @@ public sealed class AgentApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem startWithWindowsItem;
     private readonly ToolStripMenuItem exitItem;
     private readonly Control uiInvoker;
-    private readonly IProfileOrchestrator profileOrchestrator;
+    private readonly IAgentApiOperationService operationService;
     private readonly IAgentStatusService agentStatusService;
     private readonly IAgentConfigurationStore configurationStore;
     private readonly IStartupRegistration startupRegistration;
@@ -34,19 +35,18 @@ public sealed class AgentApplicationContext : ApplicationContext
     private readonly StatusForm statusForm;
     private readonly SettingsForm settingsForm;
 
-    private bool operationInProgress;
-
     public AgentApplicationContext(
-        IProfileOrchestrator profileOrchestrator,
+        IAgentApiOperationService operationService,
         IAgentStatusService agentStatusService,
         IAgentConfigurationStore configurationStore,
         IStartupRegistration startupRegistration,
         ISingleInstanceCoordinator singleInstanceCoordinator,
         IAgentLogFileAccessor logFileAccessor,
+        IApiTokenStore apiTokenStore,
         CouchControlPaths paths,
         ILogger<AgentApplicationContext> logger)
     {
-        this.profileOrchestrator = profileOrchestrator;
+        this.operationService = operationService;
         this.agentStatusService = agentStatusService;
         this.configurationStore = configurationStore;
         this.startupRegistration = startupRegistration;
@@ -61,10 +61,8 @@ public sealed class AgentApplicationContext : ApplicationContext
         uiInvoker = new Control();
         uiInvoker.CreateControl();
 
-        activateCouchModeItem = new ToolStripMenuItem("Activate Couch Mode", null, async (_, _) => await RunProfileOperationAsync(
-            static orchestrator => orchestrator.ActivateCouchModeAsync()));
-        restoreDesktopModeItem = new ToolStripMenuItem("Restore Desktop Mode", null, async (_, _) => await RunProfileOperationAsync(
-            static orchestrator => orchestrator.ActivateDesktopModeAsync()));
+        activateCouchModeItem = new ToolStripMenuItem("Activate Couch Mode", null, (_, _) => StartCouchMode());
+        restoreDesktopModeItem = new ToolStripMenuItem("Restore Desktop Mode", null, (_, _) => StartDesktopMode());
         startWithWindowsItem = new ToolStripMenuItem("Start with Windows", null, (_, _) => ToggleStartupRegistration())
         {
             CheckOnClick = true
@@ -72,7 +70,7 @@ public sealed class AgentApplicationContext : ApplicationContext
         exitItem = new ToolStripMenuItem("Exit", null, (_, _) => ExitApplication());
 
         statusForm = new StatusForm(agentStatusService);
-        settingsForm = new SettingsForm(configurationStore, startupRegistration, startupCommandLine);
+        settingsForm = new SettingsForm(configurationStore, startupRegistration, startupCommandLine, apiTokenStore);
 
         var contextMenu = new ContextMenuStrip();
         contextMenu.Opening += (_, _) => RefreshMenuState();
@@ -98,6 +96,7 @@ public sealed class AgentApplicationContext : ApplicationContext
         notifyIcon.DoubleClick += (_, _) => ShowStatusWindow();
 
         singleInstanceCoordinator.ActivationRequested += OnActivationRequested;
+        operationService.OperationCompleted += OnOperationCompleted;
         statusForm.FormClosed += (_, _) => { };
         settingsForm.FormClosed += (_, _) => { };
     }
@@ -107,6 +106,7 @@ public sealed class AgentApplicationContext : ApplicationContext
         if (disposing)
         {
             singleInstanceCoordinator.ActivationRequested -= OnActivationRequested;
+            operationService.OperationCompleted -= OnOperationCompleted;
             notifyIcon.Visible = false;
             notifyIcon.Dispose();
             statusForm.Dispose();
@@ -120,48 +120,10 @@ public sealed class AgentApplicationContext : ApplicationContext
     private void RefreshMenuState()
     {
         startWithWindowsItem.Checked = startupRegistration.IsEnabled(ApplicationName);
-        activateCouchModeItem.Enabled = !operationInProgress;
-        restoreDesktopModeItem.Enabled = !operationInProgress;
-        startWithWindowsItem.Enabled = !operationInProgress;
-        exitItem.Enabled = !operationInProgress;
-    }
-
-    private async Task RunProfileOperationAsync(
-        Func<IProfileOrchestrator, Task<ProfileActivationResult>> operation)
-    {
-        if (operationInProgress)
-        {
-            return;
-        }
-
-        operationInProgress = true;
-        RefreshMenuState();
-
-        try
-        {
-            var result = await operation(profileOrchestrator);
-            logger.LogInformation(
-                "Profile operation completed with status {Status}: {Message}",
-                result.Status,
-                result.SteamResult?.Message ?? result.DisplayResult.Message);
-
-            ShowOperationNotification(result);
-            await statusForm.RefreshNowAsync();
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Profile operation failed unexpectedly.");
-            notifyIcon.ShowBalloonTip(
-                5000,
-                "Failure",
-                ex.Message,
-                ToolTipIcon.Error);
-        }
-        finally
-        {
-            operationInProgress = false;
-            RefreshMenuState();
-        }
+        activateCouchModeItem.Enabled = !operationService.IsOperationRunning;
+        restoreDesktopModeItem.Enabled = !operationService.IsOperationRunning;
+        startWithWindowsItem.Enabled = !operationService.IsOperationRunning;
+        exitItem.Enabled = !operationService.IsOperationRunning;
     }
 
     private void ShowOperationNotification(ProfileActivationResult result)
@@ -268,6 +230,26 @@ public sealed class AgentApplicationContext : ApplicationContext
         ExitThread();
     }
 
+    private void StartCouchMode()
+    {
+        if (!operationService.TryStartActivateCouchMode(out _))
+        {
+            return;
+        }
+
+        RefreshMenuState();
+    }
+
+    private void StartDesktopMode()
+    {
+        if (!operationService.TryStartActivateDesktopMode(out _))
+        {
+            return;
+        }
+
+        RefreshMenuState();
+    }
+
     private void OnActivationRequested(object? sender, EventArgs e)
     {
         if (uiInvoker.IsDisposed)
@@ -279,6 +261,34 @@ public sealed class AgentApplicationContext : ApplicationContext
         {
             ShowStatusWindow();
             notifyIcon.ShowBalloonTip(3000, "Couch Control", "The existing agent instance is already running.", ToolTipIcon.Info);
+        });
+    }
+
+    private void OnOperationCompleted(object? sender, AgentOperationRecord operation)
+    {
+        if (uiInvoker.IsDisposed)
+        {
+            return;
+        }
+
+        _ = uiInvoker.BeginInvoke(async () =>
+        {
+            RefreshMenuState();
+
+            if (operation.Result is not null)
+            {
+                logger.LogInformation(
+                    "Profile operation completed with status {Status}: {Message}",
+                    operation.Result.Status,
+                    operation.Result.SteamResult?.Message ?? operation.Result.DisplayResult.Message);
+                ShowOperationNotification(operation.Result);
+            }
+            else
+            {
+                notifyIcon.ShowBalloonTip(5000, "Failure", operation.Message ?? "Operation failed.", ToolTipIcon.Error);
+            }
+
+            await statusForm.RefreshNowAsync();
         });
     }
 }

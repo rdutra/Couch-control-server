@@ -8,6 +8,88 @@ namespace CouchControl.Core.Tests;
 public sealed class WindowsDisplayManagerRestoreTests
 {
     [Fact]
+    public async Task ActivateOnlyAsync_UsesExplicitDeviceSettingsActivation()
+    {
+        var adapterId = new LUID { HighPart = 1, LowPart = 1 };
+        var ultrawidePath = @"\\?\DISPLAY#GBT3406#5&371a1502&0&UID33024#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}";
+        var tvPath = @"\\?\DISPLAY#SAM735A#5&371a1502&0&UID33029#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}";
+
+        var currentTopology = QueryState.Create(
+            CreateDisplay(adapterId, 0, 33024, ultrawidePath, "GS34WQC", isActive: true, width: 3440, height: 1440, positionX: 0, positionY: 0, outputTechnology: DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY.DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EXTERNAL),
+            CreateDisplay(adapterId, 1, 33029, tvPath, "SAMSUNG", isActive: false, width: 3840, height: 2160, positionX: 3440, positionY: 0, outputTechnology: DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY.DISPLAYCONFIG_OUTPUT_TECHNOLOGY_HDMI));
+
+        var activatedTopology = QueryState.Create(
+            CreateDisplay(adapterId, 1, 33029, tvPath, "SAMSUNG", isActive: true, width: 1920, height: 1080, positionX: 0, positionY: 0, outputTechnology: DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY.DISPLAYCONFIG_OUTPUT_TECHNOLOGY_HDMI));
+
+        var displaySystem = new FakeWindowsDisplaySystem(
+            currentTopology,
+            activatedTopology,
+            supportedModes: new Dictionary<string, IReadOnlyList<DisplayMode>>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["DISPLAY1"] = [new DisplayMode(3440, 1440, 100)],
+                ["DISPLAY2"] = [new DisplayMode(1920, 1080, 60), new DisplayMode(3840, 2160, 60)]
+            },
+            sourceNames: new Dictionary<(uint AdapterLowPart, uint SourceId), string>
+            {
+                [(adapterId.LowPart, 0)] = "DISPLAY1",
+                [(adapterId.LowPart, 1)] = "DISPLAY2"
+            });
+
+        var manager = new WindowsDisplayManager(displaySystem, NullLogger<WindowsDisplayManager>.Instance, skipPlatformCheck: true);
+
+        var result = await manager.ActivateOnlyAsync(new DisplayIdentifier(tvPath), new DisplayMode(1920, 1080, 60));
+
+        Assert.True(result.Succeeded);
+        Assert.Equal("single_display_device_settings", result.Outcome);
+        Assert.Contains("Attempting explicit single-display activation", result.Details);
+        Assert.Contains("Detaching GS34WQC", result.Details);
+        Assert.Contains("Configuring SAMSUNG as primary display", result.Details);
+        Assert.Empty(displaySystem.SetDisplayConfigCalls);
+        Assert.Equal(2, displaySystem.ChangeDisplaySettingsExCalls.Count);
+        Assert.Equal("DISPLAY1", displaySystem.ChangeDisplaySettingsExCalls[0].DeviceName);
+        Assert.Equal("DISPLAY2", displaySystem.ChangeDisplaySettingsExCalls[1].DeviceName);
+        Assert.Equal((uint)1920, displaySystem.ChangeDisplaySettingsExCalls[1].Width);
+        Assert.Equal((uint)1080, displaySystem.ChangeDisplaySettingsExCalls[1].Height);
+        Assert.Equal(1, displaySystem.CommitDisplaySettingsCallCount);
+    }
+
+    [Fact]
+    public async Task ActivateOnlyAsync_DryRun_DoesNotCommitDeviceSettings()
+    {
+        var adapterId = new LUID { HighPart = 1, LowPart = 1 };
+        var ultrawidePath = @"\\?\DISPLAY#GBT3406#5&371a1502&0&UID33024#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}";
+        var tvPath = @"\\?\DISPLAY#SAM735A#5&371a1502&0&UID33029#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}";
+
+        var currentTopology = QueryState.Create(
+            CreateDisplay(adapterId, 0, 33024, ultrawidePath, "GS34WQC", isActive: true, width: 3440, height: 1440, positionX: 0, positionY: 0, outputTechnology: DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY.DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EXTERNAL),
+            CreateDisplay(adapterId, 1, 33029, tvPath, "SAMSUNG", isActive: false, width: 3840, height: 2160, positionX: 3440, positionY: 0, outputTechnology: DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY.DISPLAYCONFIG_OUTPUT_TECHNOLOGY_HDMI));
+
+        var displaySystem = new FakeWindowsDisplaySystem(
+            currentTopology,
+            currentTopology,
+            supportedModes: new Dictionary<string, IReadOnlyList<DisplayMode>>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["DISPLAY1"] = [new DisplayMode(3440, 1440, 100)],
+                ["DISPLAY2"] = [new DisplayMode(1920, 1080, 60)]
+            },
+            sourceNames: new Dictionary<(uint AdapterLowPart, uint SourceId), string>
+            {
+                [(adapterId.LowPart, 0)] = "DISPLAY1",
+                [(adapterId.LowPart, 1)] = "DISPLAY2"
+            });
+
+        var manager = new WindowsDisplayManager(displaySystem, NullLogger<WindowsDisplayManager>.Instance, skipPlatformCheck: true);
+
+        var result = await manager.ActivateOnlyAsync(new DisplayIdentifier(tvPath), new DisplayMode(1920, 1080, 60), dryRun: true);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal("single_display_device_settings", result.Outcome);
+        Assert.Contains("Dry run planned explicit single-display restore", result.Details);
+        Assert.Equal(2, displaySystem.ChangeDisplaySettingsExCalls.Count);
+        Assert.Equal(0, displaySystem.CommitDisplaySettingsCallCount);
+    }
+
+    [Fact]
     public async Task RestoreSnapshotAsync_SingleDisplaySnapshot_UsesExplicitDeviceSettingsRestore()
     {
         var adapterId = new LUID { HighPart = 1, LowPart = 1 };

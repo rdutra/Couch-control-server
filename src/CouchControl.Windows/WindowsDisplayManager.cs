@@ -137,61 +137,47 @@ public sealed class WindowsDisplayManager : IDisplayManager
                     "display_source_name_unavailable");
             }
 
-            var modeSelection = SelectBestMode(targetContext, preferredMode);
-            if (!modeSelection.Succeeded || modeSelection.SourceMode is null || modeSelection.TargetMode is null)
+            var selectedSourceMode = SelectBestSourceModeForExplicitActivation(targetContext, preferredMode);
+            if (!selectedSourceMode.Succeeded || selectedSourceMode.SourceMode is null)
             {
                 return OperationResult.Failure(
-                    modeSelection.Message,
-                    modeSelection.ErrorCode);
+                    selectedSourceMode.Message,
+                    selectedSourceMode.ErrorCode);
             }
 
             _logger?.LogInformation("Switching to TV-only topology");
             _logger?.LogInformation(
                 "Applying {Width}x{Height} at {RefreshRate:0.##} Hz",
-                modeSelection.SourceMode.Width,
-                modeSelection.SourceMode.Height,
-                modeSelection.SourceMode.RefreshRateHz);
+                selectedSourceMode.SourceMode.Width,
+                selectedSourceMode.SourceMode.Height,
+                selectedSourceMode.SourceMode.RefreshRateHz);
 
-            var configurationToApply = BuildSingleDisplayConfiguration(
+            var details = new List<string>
+            {
+                "Attempting explicit single-display activation"
+            };
+
+            var activationResult = TryApplySingleDisplayDeviceSettings(
+                BuildDisplayContexts(configuration),
                 targetContext,
-                modeSelection.SourceMode,
-                modeSelection.TargetMode);
+                selectedSourceMode.SourceMode,
+                dryRun,
+                details);
 
-            var validationResult = ApplyDisplayConfiguration(configurationToApply, validateOnly: true);
-            if (validationResult != 0)
+            if (activationResult.Succeeded)
             {
-                return OperationResult.Failure(
-                    $"SetDisplayConfig validation failed with error {validationResult}.",
-                    "display_switch_validation_failed");
-            }
-
-            if (dryRun)
-            {
-                _logger?.LogInformation("Dry run enabled. Native display switch was validated but not applied.");
+                _logger?.LogInformation("Couch display active");
                 return OperationResult.Success(
-                    $"Dry run succeeded for {targetContext.FriendlyName} using {modeSelection.SourceMode}.");
+                    $"Activated {targetContext.FriendlyName} using {selectedSourceMode.SourceMode}.",
+                    outcome: "single_display_device_settings",
+                    details: activationResult.Details);
             }
 
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var applyResult = ApplyDisplayConfiguration(configurationToApply, validateOnly: false);
-            if (applyResult != 0)
-            {
-                return OperationResult.Failure(
-                    $"SetDisplayConfig failed with error {applyResult}.",
-                    "display_switch_apply_failed");
-            }
-
-            _logger?.LogInformation("Verifying display configuration");
-            var verificationResult = VerifySingleActiveDisplay(targetContext.Identifier);
-            if (!verificationResult.Succeeded)
-            {
-                return verificationResult;
-            }
-
-            _logger?.LogInformation("Couch display active");
-            return OperationResult.Success(
-                $"Activated {targetContext.FriendlyName} using {modeSelection.SourceMode}.");
+            return OperationResult.Failure(
+                activationResult.Message,
+                activationResult.ErrorCode,
+                outcome: activationResult.Outcome,
+                details: activationResult.Details);
         }
         finally
         {
@@ -668,6 +654,50 @@ public sealed class WindowsDisplayManager : IDisplayManager
         bool dryRun,
         List<string> seedDetails)
     {
+        var width = snapshotPath.SourceMode?.Width ?? 0;
+        var height = snapshotPath.SourceMode?.Height ?? 0;
+        var refreshRateHz = snapshotPath.RefreshRate.Hertz;
+
+        return TryApplySingleDisplayDeviceSettings(
+            contexts,
+            targetContext,
+            width,
+            height,
+            refreshRateHz,
+            snapshotPath.SourceMode?.Position.X ?? 0,
+            snapshotPath.SourceMode?.Position.Y ?? 0,
+            dryRun,
+            seedDetails);
+    }
+
+    private DeviceSettingsRestoreResult TryApplySingleDisplayDeviceSettings(
+        IReadOnlyList<DisplayPathContext> contexts,
+        DisplayPathContext targetContext,
+        DisplayMode targetMode,
+        bool dryRun,
+        List<string> seedDetails) =>
+        TryApplySingleDisplayDeviceSettings(
+            contexts,
+            targetContext,
+            (uint)targetMode.Width,
+            (uint)targetMode.Height,
+            targetMode.RefreshRateHz,
+            0,
+            0,
+            dryRun,
+            seedDetails);
+
+    private DeviceSettingsRestoreResult TryApplySingleDisplayDeviceSettings(
+        IReadOnlyList<DisplayPathContext> contexts,
+        DisplayPathContext targetContext,
+        uint width,
+        uint height,
+        decimal refreshRateHz,
+        int positionX,
+        int positionY,
+        bool dryRun,
+        List<string> seedDetails)
+    {
         var details = new List<string>(seedDetails);
         if (string.IsNullOrWhiteSpace(targetContext.SourceDeviceName))
         {
@@ -678,7 +708,7 @@ public sealed class WindowsDisplayManager : IDisplayManager
                 details);
         }
 
-        if (!TryBuildEnabledDisplaySettings(targetContext, snapshotPath, out var targetMode, out var targetBuildError))
+        if (!TryBuildEnabledDisplaySettings(targetContext, width, height, refreshRateHz, positionX, positionY, out var enabledTargetMode, out var targetBuildError))
         {
             details.Add(targetBuildError);
             return DeviceSettingsRestoreResult.Failure(
@@ -716,7 +746,7 @@ public sealed class WindowsDisplayManager : IDisplayManager
 
         details.Add($"Configuring {targetContext.FriendlyName} as primary display");
         var targetFlags = NativeMethods.CDS_UPDATEREGISTRY | NativeMethods.CDS_NORESET | NativeMethods.CDS_SET_PRIMARY;
-        var targetResult = _displaySystem.ChangeDisplaySettingsEx(targetContext.SourceDeviceName!, targetMode, targetFlags);
+        var targetResult = _displaySystem.ChangeDisplaySettingsEx(targetContext.SourceDeviceName!, enabledTargetMode, targetFlags);
         if (targetResult != NativeMethods.DISP_CHANGE_SUCCESSFUL)
         {
             details.Add($"Configuring {targetContext.FriendlyName} failed with error {targetResult}");
@@ -767,6 +797,25 @@ public sealed class WindowsDisplayManager : IDisplayManager
         out DEVMODE mode,
         out string error)
     {
+        var width = snapshotPath.SourceMode?.Width ?? 0;
+        var height = snapshotPath.SourceMode?.Height ?? 0;
+        var refreshRateHz = snapshotPath.RefreshRate.Hertz;
+        var positionX = snapshotPath.SourceMode?.Position.X ?? 0;
+        var positionY = snapshotPath.SourceMode?.Position.Y ?? 0;
+
+        return TryBuildEnabledDisplaySettings(targetContext, width, height, refreshRateHz, positionX, positionY, out mode, out error);
+    }
+
+    private bool TryBuildEnabledDisplaySettings(
+        DisplayPathContext targetContext,
+        uint width,
+        uint height,
+        decimal refreshRateHz,
+        int positionX,
+        int positionY,
+        out DEVMODE mode,
+        out string error)
+    {
         mode = new DEVMODE
         {
             dmSize = (ushort)Marshal.SizeOf<DEVMODE>()
@@ -782,8 +831,8 @@ public sealed class WindowsDisplayManager : IDisplayManager
             };
         }
 
-        var width = snapshotPath.SourceMode?.Width ?? mode.dmPelsWidth;
-        var height = snapshotPath.SourceMode?.Height ?? mode.dmPelsHeight;
+        width = width == 0 ? mode.dmPelsWidth : width;
+        height = height == 0 ? mode.dmPelsHeight : height;
         if (width == 0 || height == 0)
         {
             error = $"No usable mode information was available for '{targetContext.FriendlyName}'.";
@@ -792,8 +841,8 @@ public sealed class WindowsDisplayManager : IDisplayManager
 
         mode.dmPelsWidth = width;
         mode.dmPelsHeight = height;
-        mode.dmPositionX = snapshotPath.SourceMode?.Position.X ?? 0;
-        mode.dmPositionY = snapshotPath.SourceMode?.Position.Y ?? 0;
+        mode.dmPositionX = positionX;
+        mode.dmPositionY = positionY;
         mode.dmFields = NativeMethods.DM_POSITION | NativeMethods.DM_PELSWIDTH | NativeMethods.DM_PELSHEIGHT;
 
         if (mode.dmBitsPerPel != 0)
@@ -801,9 +850,9 @@ public sealed class WindowsDisplayManager : IDisplayManager
             mode.dmFields |= NativeMethods.DM_BITSPERPEL;
         }
 
-        if (snapshotPath.RefreshRate.Hertz > 0)
+        if (refreshRateHz > 0)
         {
-            mode.dmDisplayFrequency = (uint)Math.Round(snapshotPath.RefreshRate.Hertz, MidpointRounding.AwayFromZero);
+            mode.dmDisplayFrequency = (uint)Math.Round(refreshRateHz, MidpointRounding.AwayFromZero);
             mode.dmFields |= NativeMethods.DM_DISPLAYFREQUENCY;
         }
 
@@ -1279,6 +1328,51 @@ public sealed class WindowsDisplayManager : IDisplayManager
         return ModeSelectionResult.Failure(
             $"No safe display mode exists for '{context.FriendlyName}'. Requested mode: {preferredMode?.ToString() ?? "default"}",
             "display_safe_mode_unavailable");
+    }
+
+    private SourceModeSelectionResult SelectBestSourceModeForExplicitActivation(DisplayPathContext context, DisplayMode? preferredMode)
+    {
+        var supportedModes = context.SupportedSourceModes
+            .Where(mode => mode.IsValid)
+            .Distinct(DisplayModeEqualityComparer.Instance)
+            .ToArray();
+
+        if (supportedModes.Length == 0)
+        {
+            return SourceModeSelectionResult.Failure(
+                $"No supported source modes were found for '{context.FriendlyName}'.",
+                "display_supported_modes_unavailable");
+        }
+
+        if (preferredMode is not null)
+        {
+            var exact = supportedModes.FirstOrDefault(mode => mode.Equals(preferredMode));
+            if (exact is not null)
+            {
+                return SourceModeSelectionResult.Success(exact);
+            }
+
+            var sameResolution = supportedModes
+                .Where(mode => mode.Width == preferredMode.Width && mode.Height == preferredMode.Height)
+                .OrderBy(mode => Math.Abs(mode.RefreshRateHz - preferredMode.RefreshRateHz))
+                .FirstOrDefault();
+
+            if (sameResolution is not null)
+            {
+                return SourceModeSelectionResult.Success(sameResolution);
+            }
+        }
+
+        if (context.SourceMode.HasValue)
+        {
+            var currentSourceMode = ToDisplayMode(context.SourceMode.Value, context.Path.targetInfo.refreshRate);
+            if (currentSourceMode is not null)
+            {
+                return SourceModeSelectionResult.Success(currentSourceMode);
+            }
+        }
+
+        return SourceModeSelectionResult.Success(supportedModes[0]);
     }
 
     private static List<KnownModePair> BuildKnownModePairs(
@@ -1946,6 +2040,19 @@ public sealed class WindowsDisplayManager : IDisplayManager
 
         public static ModeSelectionResult Failure(string message, string errorCode) =>
             new(false, message, errorCode, null, null);
+    }
+
+    private sealed record SourceModeSelectionResult(
+        bool Succeeded,
+        string Message,
+        string? ErrorCode,
+        DisplayMode? SourceMode)
+    {
+        public static SourceModeSelectionResult Success(DisplayMode sourceMode) =>
+            new(true, "Display source mode selected.", null, sourceMode);
+
+        public static SourceModeSelectionResult Failure(string message, string errorCode) =>
+            new(false, message, errorCode, null);
     }
 
     private sealed record DeviceSettingsRestoreResult(

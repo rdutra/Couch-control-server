@@ -2,16 +2,18 @@ using CouchControl.Agent.Hosting;
 using CouchControl.Agent.Logging;
 using CouchControl.Agent.Status;
 using CouchControl.Windows;
+using CouchControl.Windows.AgentApi;
 using CouchControl.Windows.Runtime;
 using CouchControl.Windows.Startup;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 ApplicationConfiguration.Initialize();
 
-using var host = CreateHost(args);
-using var scope = host.Services.CreateScope();
+using var app = CreateApp(args);
+using var scope = app.Services.CreateScope();
 var services = scope.ServiceProvider;
 
 var singleInstanceCoordinator = services.GetRequiredService<ISingleInstanceCoordinator>();
@@ -34,7 +36,10 @@ AppDomain.CurrentDomain.UnhandledException += (_, eventArgs) =>
     }
 };
 
-await host.StartAsync();
+await AgentApiApplicationExtensions.InitializeAgentApiAsync(app.Services);
+var apiOptions = app.Services.GetRequiredService<AgentApiRuntimeOptionsProvider>();
+app.Urls.Add($"http://0.0.0.0:{apiOptions.Port}");
+await app.StartAsync();
 
 try
 {
@@ -43,12 +48,12 @@ try
 }
 finally
 {
-    await host.StopAsync();
+    await app.StopAsync();
 }
 
-static IHost CreateHost(string[] args)
+static WebApplication CreateApp(string[] args)
 {
-    var builder = Host.CreateApplicationBuilder(args);
+    var builder = WebApplication.CreateBuilder(args);
 
     builder.Logging.ClearProviders();
     builder.Logging.AddSimpleConsole(options =>
@@ -66,5 +71,7 @@ static IHost CreateHost(string[] args)
     builder.Services.AddSingleton<IAgentStatusService, AgentStatusService>();
     builder.Services.AddSingleton<AgentApplicationContext>();
 
-    return builder.Build();
+    var app = builder.Build();
+    app.MapCouchControlAgentApi();
+    return app;
 }
