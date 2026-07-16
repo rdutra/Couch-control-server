@@ -90,6 +90,58 @@ public sealed class WindowsDisplayManagerRestoreTests
     }
 
     [Fact]
+    public async Task ActivateOnlyAsync_RetriesAfterExtendFallbackWhenVerificationFails()
+    {
+        var adapterId = new LUID { HighPart = 1, LowPart = 1 };
+        var ultrawidePath = @"\\?\DISPLAY#GBT3406#5&371a1502&0&UID33024#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}";
+        var tvPath = @"\\?\DISPLAY#SAM735A#5&371a1502&0&UID33029#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}";
+
+        var currentTopology = QueryState.Create(
+            CreateDisplay(adapterId, 0, 33024, ultrawidePath, "GS34WQC", isActive: true, width: 3440, height: 1440, positionX: 0, positionY: 0, outputTechnology: DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY.DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EXTERNAL),
+            CreateDisplay(adapterId, 1, 33029, tvPath, "SAMSUNG", isActive: false, width: 3840, height: 2160, positionX: 3440, positionY: 0, outputTechnology: DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY.DISPLAYCONFIG_OUTPUT_TECHNOLOGY_HDMI));
+
+        var failedActivatedTopology = QueryState.Create(
+            CreateDisplay(adapterId, 1, 33029, tvPath, "SAMSUNG", isActive: false, width: 1920, height: 1080, positionX: 0, positionY: 0, outputTechnology: DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY.DISPLAYCONFIG_OUTPUT_TECHNOLOGY_HDMI));
+
+        var extendedTopology = QueryState.Create(
+            CreateDisplay(adapterId, 0, 33024, ultrawidePath, "GS34WQC", isActive: true, width: 3440, height: 1440, positionX: 0, positionY: 0, outputTechnology: DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY.DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EXTERNAL),
+            CreateDisplay(adapterId, 1, 33029, tvPath, "SAMSUNG", isActive: true, width: 3840, height: 2160, positionX: 3440, positionY: 0, outputTechnology: DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY.DISPLAYCONFIG_OUTPUT_TECHNOLOGY_HDMI));
+
+        var finalActivatedTopology = QueryState.Create(
+            CreateDisplay(adapterId, 1, 33029, tvPath, "SAMSUNG", isActive: true, width: 1920, height: 1080, positionX: 0, positionY: 0, outputTechnology: DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY.DISPLAYCONFIG_OUTPUT_TECHNOLOGY_HDMI));
+
+        var displaySystem = new FakeWindowsDisplaySystem(
+            currentTopology,
+            failedActivatedTopology,
+            supportedModes: new Dictionary<string, IReadOnlyList<DisplayMode>>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["DISPLAY1"] = [new DisplayMode(3440, 1440, 100)],
+                ["DISPLAY2"] = [new DisplayMode(1920, 1080, 60), new DisplayMode(3840, 2160, 60)]
+            },
+            sourceNames: new Dictionary<(uint AdapterLowPart, uint SourceId), string>
+            {
+                [(adapterId.LowPart, 0)] = "DISPLAY1",
+                [(adapterId.LowPart, 1)] = "DISPLAY2"
+            })
+        {
+            ExtendedState = extendedTopology,
+            CommitStates = new Queue<QueryState>(new[] { failedActivatedTopology, finalActivatedTopology })
+        };
+
+        var manager = new WindowsDisplayManager(displaySystem, NullLogger<WindowsDisplayManager>.Instance, skipPlatformCheck: true);
+
+        var result = await manager.ActivateOnlyAsync(new DisplayIdentifier(tvPath), new DisplayMode(1920, 1080, 60));
+
+        Assert.True(result.Succeeded);
+        Assert.Equal("single_display_device_settings_after_extend_fallback", result.Outcome);
+        Assert.Contains("Using activation fallback: DisplaySwitch.exe /extend", result.Details);
+        Assert.Contains("Attempting explicit single-display activation after extend fallback", result.Details);
+        Assert.Equal(1, displaySystem.DisplaySwitchExtendCallCount);
+        Assert.Equal(4, displaySystem.ChangeDisplaySettingsExCalls.Count);
+        Assert.Equal(2, displaySystem.CommitDisplaySettingsCallCount);
+    }
+
+    [Fact]
     public async Task RestoreSnapshotAsync_SingleDisplaySnapshot_UsesExplicitDeviceSettingsRestore()
     {
         var adapterId = new LUID { HighPart = 1, LowPart = 1 };
@@ -354,6 +406,8 @@ public sealed class WindowsDisplayManagerRestoreTests
 
         public QueryState? ExtendedState { get; init; }
 
+        public Queue<QueryState>? CommitStates { get; init; }
+
         public List<ChangeDisplaySettingsExCall> ChangeDisplaySettingsExCalls { get; } = [];
 
         public int GetDisplayConfigBufferSizes(uint flags, out uint numPathArrayElements, out uint numModeInfoArrayElements)
@@ -470,7 +524,9 @@ public sealed class WindowsDisplayManagerRestoreTests
         public int CommitDisplaySettings()
         {
             CommitDisplaySettingsCallCount++;
-            currentState = restoredState;
+            currentState = CommitStates is { Count: > 0 }
+                ? CommitStates.Dequeue()
+                : restoredState;
             return NativeMethods.DISP_CHANGE_SUCCESSFUL;
         }
 

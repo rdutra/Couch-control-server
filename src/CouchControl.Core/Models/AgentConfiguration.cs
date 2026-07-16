@@ -22,9 +22,17 @@ public sealed record AgentConfiguration
 
     public string? SteamExecutablePath { get; init; }
 
+    public string? TvPreparationCommand { get; init; }
+
+    public int TvPreparationDelayMs { get; init; } = 4000;
+
     public int ApiPort { get; init; } = 47981;
 
+    public string? ApiListeningInterfaceId { get; init; }
+
     public IReadOnlyList<string> CorsAllowedOrigins { get; init; } = Array.Empty<string>();
+
+    public bool AutomaticallyRecoverInterruptedDisplayOperations { get; init; }
 
     public DisplayMode PreferredCouchMode =>
         new(PreferredCouchWidth, PreferredCouchHeight, PreferredCouchRefreshRateHz);
@@ -46,9 +54,25 @@ public sealed record AgentConfiguration
             return OperationResult.Failure("Steam executable path cannot be whitespace.", "invalid_steam_path");
         }
 
+        if (TvPreparationCommand is { Length: > 0 } tvPreparationCommand &&
+            string.IsNullOrWhiteSpace(tvPreparationCommand))
+        {
+            return OperationResult.Failure("TV preparation command cannot be whitespace.", "invalid_tv_preparation_command");
+        }
+
+        if (TvPreparationDelayMs is < 0 or > 60000)
+        {
+            return OperationResult.Failure("TV preparation delay must be between 0 and 60000 milliseconds.", "invalid_tv_preparation_delay");
+        }
+
         if (ApiPort is < 1 or > 65535)
         {
             return OperationResult.Failure("API port must be between 1 and 65535.", "invalid_api_port");
+        }
+
+        if (ApiListeningInterfaceId is { Length: > 0 } interfaceId && string.IsNullOrWhiteSpace(interfaceId))
+        {
+            return OperationResult.Failure("API listening interface cannot be whitespace.", "invalid_api_interface");
         }
 
         if (CorsAllowedOrigins.Any(static origin => string.IsNullOrWhiteSpace(origin)))

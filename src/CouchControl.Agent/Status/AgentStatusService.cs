@@ -1,5 +1,6 @@
 using CouchControl.Core.Abstractions;
 using CouchControl.Core.Models;
+using CouchControl.Windows.AgentApi;
 
 namespace CouchControl.Agent.Status;
 
@@ -14,17 +15,20 @@ public sealed class AgentStatusService : IAgentStatusService
     private readonly IDisplayManager displayManager;
     private readonly IProfileOrchestrator profileOrchestrator;
     private readonly ISteamLauncher steamLauncher;
+    private readonly IAgentNetworkDiagnosticsService diagnosticsService;
 
     public AgentStatusService(
         IAgentConfigurationStore configurationStore,
         IDisplayManager displayManager,
         IProfileOrchestrator profileOrchestrator,
-        ISteamLauncher steamLauncher)
+        ISteamLauncher steamLauncher,
+        IAgentNetworkDiagnosticsService diagnosticsService)
     {
         this.configurationStore = configurationStore;
         this.displayManager = displayManager;
         this.profileOrchestrator = profileOrchestrator;
         this.steamLauncher = steamLauncher;
+        this.diagnosticsService = diagnosticsService;
     }
 
     public async Task<AgentStatusSnapshot> GetStatusAsync(CancellationToken cancellationToken = default)
@@ -32,6 +36,7 @@ public sealed class AgentStatusService : IAgentStatusService
         var operationStatus = profileOrchestrator.GetStatus();
         var configuration = await configurationStore.LoadAsync(cancellationToken);
         var displays = await displayManager.GetDisplaysAsync(cancellationToken);
+        var diagnostics = await diagnosticsService.GetSnapshotAsync(cancellationToken);
 
         bool isTvConfigured = configuration.CouchDisplayIdentifier is not null;
         var matchedTv = isTvConfigured
@@ -62,6 +67,9 @@ public sealed class AgentStatusService : IAgentStatusService
             CurrentStep: FormatStep(operationStatus.CurrentStep, operationStatus.State),
             ConfiguredTv: configuredTv,
             TvConnectionStatus: tvConnectionStatus,
+            ListeningAddresses: diagnostics.LanIpv4Addresses.Count == 0
+                ? diagnostics.ApiHealthStatus
+                : string.Join(", ", diagnostics.LanIpv4Addresses),
             SteamStatus: steamStatus,
             LastResult: FormatLastResult(operationStatus));
     }

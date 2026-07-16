@@ -23,7 +23,13 @@ public static class AgentApiApplicationExtensions
         });
 
         services.AddSingleton<IProtectedDataService, DpapiProtectedDataService>();
+        services.AddSingleton<TimeProvider>(TimeProvider.System);
         services.AddSingleton<IApiTokenStore, ApiTokenStore>();
+        services.AddSingleton<IPairingService, PairingService>();
+        services.AddSingleton<ILocalNetworkInterfaceProvider, LocalNetworkInterfaceProvider>();
+        services.AddSingleton<IWindowsFirewallRuleManager, WindowsFirewallRuleManager>();
+        services.AddSingleton<IAgentApiHealthState, AgentApiHealthState>();
+        services.AddSingleton<IAgentNetworkDiagnosticsService, AgentNetworkDiagnosticsService>();
         services.AddSingleton<AgentApiRuntimeOptionsProvider>();
         services.AddSingleton<IAgentApiOperationService, AgentApiOperationService>();
 
@@ -37,6 +43,8 @@ public static class AgentApiApplicationExtensions
         app.UseAgentApiCors();
         app.UseAgentApiRequestLogging();
 
+        app.MapPost("/api/v1/pair", PairAsync);
+
         var protectedApi = app.MapGroup("/api/v1");
         protectedApi.AddEndpointFilter<AgentApiAuthorizationFilter>();
 
@@ -45,6 +53,10 @@ public static class AgentApiApplicationExtensions
         protectedApi.MapPost("/modes/couch", StartCouchModeAsync);
         protectedApi.MapPost("/modes/desktop", StartDesktopModeAsync);
         protectedApi.MapGet("/operations/{operationId:guid}", GetOperationAsync);
+        protectedApi.MapGet("/paired-devices", GetPairedDevicesAsync)
+            .AddEndpointFilter<AdministrativeApiAuthorizationFilter>();
+        protectedApi.MapDelete("/paired-devices/{deviceId}", DeletePairedDeviceAsync)
+            .AddEndpointFilter<AdministrativeApiAuthorizationFilter>();
 
         return app;
     }
@@ -101,6 +113,32 @@ public static class AgentApiApplicationExtensions
             display.OutputTechnology ?? "Unknown")));
     }
 
+    private static async Task<IResult> PairAsync(
+        PairRequest request,
+        IPairingService pairingService,
+        IAgentConfigurationStore configurationStore,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.DeviceName) || string.IsNullOrWhiteSpace(request.PairingCode))
+        {
+            return Results.BadRequest(new ErrorResponse("Pairing failed."));
+        }
+
+        var result = await pairingService.PairAsync(request.PairingCode, request.DeviceName, cancellationToken);
+        if (!result.Succeeded || result.Token is null)
+        {
+            return result.FailureReason == PairingFailureReason.RateLimited
+                ? Results.StatusCode(StatusCodes.Status429TooManyRequests)
+                : Results.BadRequest(new ErrorResponse("Pairing failed."));
+        }
+
+        var configuration = await configurationStore.LoadAsync(cancellationToken);
+        return Results.Ok(new PairResponse(
+            result.Token.Token,
+            configuration.AgentName,
+            "v1"));
+    }
+
     private static IResult StartCouchModeAsync(IAgentApiOperationService operationService)
     {
         if (!operationService.TryStartActivateCouchMode(out var operationId))
@@ -129,6 +167,29 @@ public static class AgentApiApplicationExtensions
         }
 
         return Results.Ok(ToOperationResponse(operation));
+    }
+
+    private static async Task<IResult> GetPairedDevicesAsync(
+        IApiTokenStore tokenStore,
+        CancellationToken cancellationToken)
+    {
+        var devices = await tokenStore.GetPairedDevicesAsync(cancellationToken);
+        return Results.Ok(devices.Select(static device => new PairedDeviceResponse(
+            device.DeviceId,
+            device.DeviceName,
+            device.PairedAtUtc,
+            device.LastSeenAtUtc)));
+    }
+
+    private static async Task<IResult> DeletePairedDeviceAsync(
+        string deviceId,
+        IApiTokenStore tokenStore,
+        CancellationToken cancellationToken)
+    {
+        var removed = await tokenStore.RevokeDeviceAsync(deviceId, cancellationToken);
+        return removed
+            ? Results.NoContent()
+            : Results.NotFound(new ErrorResponse("Unknown device ID."));
     }
 
     private static OperationResponse ToOperationResponse(AgentOperationRecord operation) =>
@@ -196,11 +257,13 @@ internal sealed class AgentApiAuthorizationFilter : IEndpointFilter
         }
 
         var tokenStore = context.HttpContext.RequestServices.GetRequiredService<IApiTokenStore>();
-        if (!await tokenStore.ValidateAsync(token, context.HttpContext.RequestAborted))
+        var principal = await tokenStore.AuthenticateAsync(token, context.HttpContext.RequestAborted);
+        if (principal is null)
         {
             return Results.Unauthorized();
         }
 
+        context.HttpContext.Items[AuthenticatedApiTokenHttpContextExtensions.ItemKey] = principal;
         return await next(context);
     }
 
@@ -216,6 +279,30 @@ internal sealed class AgentApiAuthorizationFilter : IEndpointFilter
         token = string.Empty;
         return false;
     }
+}
+
+internal sealed class AdministrativeApiAuthorizationFilter : IEndpointFilter
+{
+    public ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
+    {
+        var principal = context.HttpContext.GetAuthenticatedApiToken();
+        if (principal is null || !principal.IsAdministrative)
+        {
+            return ValueTask.FromResult<object?>(Results.Unauthorized());
+        }
+
+        return next(context);
+    }
+}
+
+internal static class AuthenticatedApiTokenHttpContextExtensions
+{
+    public const string ItemKey = "__couchcontrol_authenticated_token";
+
+    public static AuthenticatedApiToken? GetAuthenticatedApiToken(this HttpContext context) =>
+        context.Items.TryGetValue(ItemKey, out var value)
+            ? value as AuthenticatedApiToken
+            : null;
 }
 
 internal static class AgentApiMiddlewareExtensions
@@ -241,7 +328,7 @@ internal static class AgentApiMiddlewareExtensions
             {
                 context.Response.Headers.AccessControlAllowOrigin = origin;
                 context.Response.Headers.AccessControlAllowHeaders = "Authorization, Content-Type";
-                context.Response.Headers.AccessControlAllowMethods = "GET, POST, OPTIONS";
+                context.Response.Headers.AccessControlAllowMethods = "GET, POST, DELETE, OPTIONS";
                 context.Response.Headers.Vary = "Origin";
 
                 if (HttpMethods.IsOptions(context.Request.Method))
@@ -258,6 +345,10 @@ internal static class AgentApiMiddlewareExtensions
 public sealed record HealthResponse(bool Healthy);
 
 public sealed record ErrorResponse(string Message);
+
+public sealed record PairRequest(string PairingCode, string DeviceName);
+
+public sealed record PairResponse(string Token, string AgentName, string ApiVersion);
 
 public sealed record OperationAcceptedResponse(bool Accepted, Guid OperationId);
 
@@ -304,3 +395,9 @@ public sealed record OperationResultResponse(
     string? SteamMessage,
     string? DisplayOutcome,
     string? SteamOutcome);
+
+public sealed record PairedDeviceResponse(
+    string DeviceId,
+    string DeviceName,
+    DateTimeOffset PairedAtUtc,
+    DateTimeOffset? LastSeenAtUtc);

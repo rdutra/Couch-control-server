@@ -16,7 +16,9 @@ public sealed class CouchControlPaths
         ConfigurationFilePath = Path.Combine(rootDirectory, "config.json");
         SnapshotsDirectory = Path.Combine(rootDirectory, "snapshots");
         LogsDirectory = Path.Combine(rootDirectory, "logs");
+        OperationJournalFilePath = Path.Combine(rootDirectory, "operation-journal.json");
         ApiTokenFilePath = Path.Combine(rootDirectory, "api-token.bin");
+        PairedDevicesFilePath = Path.Combine(rootDirectory, "paired-devices.bin");
     }
 
     public string RootDirectory { get; }
@@ -27,7 +29,11 @@ public sealed class CouchControlPaths
 
     public string LogsDirectory { get; }
 
+    public string OperationJournalFilePath { get; }
+
     public string ApiTokenFilePath { get; }
+
+    public string PairedDevicesFilePath { get; }
 
     public string GetLogFilePath(DateTimeOffset timestamp) =>
         Path.Combine(LogsDirectory, $"agent-{timestamp:yyyyMMdd}.log");

@@ -144,6 +144,25 @@ if (isConfigure)
                 return 1;
             }
             return await HandleSetSteam(host, enabled, isJson, logger);
+        case "set-tv-prep":
+            int commandIdx = argsList.IndexOf("--command");
+            int delayIdx = argsList.IndexOf("--delay-ms");
+            string? tvPreparationCommand = commandIdx != -1 && commandIdx + 1 < argsList.Count
+                ? argsList[commandIdx + 1]
+                : null;
+            int? tvPreparationDelayMs = null;
+            if (delayIdx != -1)
+            {
+                if (delayIdx + 1 >= argsList.Count || !int.TryParse(argsList[delayIdx + 1], out var parsedDelay))
+                {
+                    Console.Error.WriteLine("Error: Invalid value for --delay-ms.");
+                    return 1;
+                }
+
+                tvPreparationDelayMs = parsedDelay;
+            }
+
+            return await HandleSetTvPreparation(host, tvPreparationCommand, tvPreparationDelayMs, isJson, logger);
         case "show":
             return await HandleShow(host, isJson, logger);
         default:
@@ -180,6 +199,7 @@ static void PrintConfigureUsage()
     Console.WriteLine("  CouchControl.Cli configure set-tv --display-id \"<stable-id>\"          Set the couch display (TV)");
     Console.WriteLine("  CouchControl.Cli configure set-mode --width W --height H --refresh-rate R   Set the preferred couch mode");
     Console.WriteLine("  CouchControl.Cli configure set-steam --enabled [true|false]          Enable/disable launching Steam automatically");
+    Console.WriteLine("  CouchControl.Cli configure set-tv-prep [--command \"...\"] [--delay-ms N] Configure the command that prepares the TV/input before couch mode");
     Console.WriteLine("  CouchControl.Cli configure show                                      Show current configuration");
 }
 
@@ -487,6 +507,60 @@ static async Task<int> HandleSetSteam(IHost host, bool enabled, bool isJson, ILo
     }
 }
 
+static async Task<int> HandleSetTvPreparation(
+    IHost host,
+    string? command,
+    int? delayMs,
+    bool isJson,
+    ILogger logger)
+{
+    try
+    {
+        var configStore = host.Services.GetRequiredService<IAgentConfigurationStore>();
+        var config = await configStore.LoadAsync();
+
+        var updatedConfig = config with
+        {
+            TvPreparationCommand = string.IsNullOrWhiteSpace(command) ? null : command,
+            TvPreparationDelayMs = delayMs ?? config.TvPreparationDelayMs
+        };
+
+        var validation = updatedConfig.Validate();
+        if (!validation.Succeeded)
+        {
+            Console.Error.WriteLine($"Error: Invalid configuration - {validation.Message}");
+            return 1;
+        }
+
+        await configStore.SaveAsync(updatedConfig);
+
+        if (isJson)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(new
+            {
+                Success = true,
+                TvPreparationCommand = updatedConfig.TvPreparationCommand,
+                TvPreparationDelayMs = updatedConfig.TvPreparationDelayMs
+            }));
+        }
+        else
+        {
+            Console.WriteLine(updatedConfig.TvPreparationCommand is null
+                ? "TV preparation command cleared."
+                : "TV preparation command configured.");
+            Console.WriteLine($"Delay: {updatedConfig.TvPreparationDelayMs} ms");
+        }
+
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to configure TV preparation.");
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        return 1;
+    }
+}
+
 static async Task<int> HandleShow(IHost host, bool isJson, ILogger logger)
 {
     try
@@ -523,6 +597,8 @@ static async Task<int> HandleShow(IHost host, bool isJson, ILogger logger)
         Console.WriteLine($"  Preferred Couch Mode:        {config.PreferredCouchMode}");
         Console.WriteLine($"  Launch Steam Automatically:  {config.LaunchSteamAutomatically}");
         Console.WriteLine($"  Steam Executable Path:       {config.SteamExecutablePath ?? "Not configured (will search defaults)"}");
+        Console.WriteLine($"  TV Preparation Command:      {config.TvPreparationCommand ?? "Not configured"}");
+        Console.WriteLine($"  TV Preparation Delay:        {config.TvPreparationDelayMs} ms");
 
         return 0;
     }

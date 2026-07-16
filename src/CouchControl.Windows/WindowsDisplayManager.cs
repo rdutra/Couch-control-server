@@ -17,6 +17,7 @@ namespace CouchControl.Windows;
 public sealed class WindowsDisplayManager : IDisplayManager
 {
     private static readonly SemaphoreSlim SwitchSemaphore = new(1, 1);
+    private static readonly TimeSpan ExtendFallbackSettleDelay = TimeSpan.FromSeconds(3);
     private readonly ILogger<WindowsDisplayManager>? _logger;
     private readonly IWindowsDisplaySystem _displaySystem;
     private readonly bool _skipPlatformCheck;
@@ -98,6 +99,74 @@ public sealed class WindowsDisplayManager : IDisplayManager
         return await Task.FromResult(snapshot);
     }
 
+    public async Task<OperationResult> PrepareForCouchModeAsync(
+        AgentConfiguration configuration,
+        CancellationToken cancellationToken = default)
+    {
+        if (configuration is null) throw new ArgumentNullException(nameof(configuration));
+
+        var command = configuration.TvPreparationCommand;
+        if (string.IsNullOrWhiteSpace(command))
+        {
+            return OperationResult.Success("No TV preparation command is configured.");
+        }
+
+        EnsureWindows();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        _logger?.LogInformation("Running configured TV preparation command before couch mode activation.");
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "cmd.exe",
+            Arguments = $"/d /s /c \"{command}\"",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start the configured TV preparation command.");
+
+        var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+        var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        await process.WaitForExitAsync(cancellationToken);
+
+        var standardOutput = await outputTask;
+        var standardError = await errorTask;
+
+        if (process.ExitCode != 0)
+        {
+            var failureMessage = string.IsNullOrWhiteSpace(standardError)
+                ? $"TV preparation command failed with exit code {process.ExitCode}."
+                : $"TV preparation command failed with exit code {process.ExitCode}: {standardError.Trim()}";
+
+            _logger?.LogWarning(
+                "TV preparation command failed with exit code {ExitCode}. Stdout: {Stdout}. Stderr: {Stderr}",
+                process.ExitCode,
+                standardOutput.Trim(),
+                standardError.Trim());
+
+            return OperationResult.Failure(failureMessage, "tv_preparation_command_failed");
+        }
+
+        if (configuration.TvPreparationDelayMs > 0)
+        {
+            _logger?.LogInformation(
+                "Waiting {DelayMs} ms after TV preparation command before retrying display detection.",
+                configuration.TvPreparationDelayMs);
+
+            await Task.Delay(configuration.TvPreparationDelayMs, cancellationToken);
+        }
+
+        return OperationResult.Success(
+            "TV preparation command completed successfully.",
+            details: string.IsNullOrWhiteSpace(standardOutput)
+                ? null
+                : [standardOutput.Trim()]);
+    }
+
     public async Task<OperationResult> ActivateOnlyAsync(
         DisplayIdentifier display,
         DisplayMode? preferredMode,
@@ -109,7 +178,7 @@ public sealed class WindowsDisplayManager : IDisplayManager
         await SwitchSemaphore.WaitAsync(cancellationToken);
         try
         {
-            var correlationId = Activity.Current?.Id ?? Guid.NewGuid().ToString("N");
+            var correlationId = GetCorrelationId();
             using var scope = _logger?.BeginScope(new Dictionary<string, object?>
             {
                 ["CorrelationId"] = correlationId
@@ -173,6 +242,23 @@ public sealed class WindowsDisplayManager : IDisplayManager
                     details: activationResult.Details);
             }
 
+            if (!dryRun && string.Equals(activationResult.ErrorCode, "display_switch_verification_failed", StringComparison.OrdinalIgnoreCase))
+            {
+                var fallbackResult = await TryActivateAfterExtendFallbackAsync(
+                    display,
+                    selectedSourceMode.SourceMode,
+                    activationResult.Details.ToList(),
+                    cancellationToken);
+
+                if (fallbackResult.Succeeded)
+                {
+                    _logger?.LogInformation("Couch display active after extend fallback.");
+                    return fallbackResult;
+                }
+
+                return fallbackResult;
+            }
+
             return OperationResult.Failure(
                 activationResult.Message,
                 activationResult.ErrorCode,
@@ -183,6 +269,61 @@ public sealed class WindowsDisplayManager : IDisplayManager
         {
             SwitchSemaphore.Release();
         }
+    }
+
+    private async Task<OperationResult> TryActivateAfterExtendFallbackAsync(
+        DisplayIdentifier display,
+        DisplayMode targetMode,
+        List<string> seedDetails,
+        CancellationToken cancellationToken)
+    {
+        var details = new List<string>(seedDetails)
+        {
+            "Using activation fallback: DisplaySwitch.exe /extend"
+        };
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var fallbackExitCode = await _displaySystem.RunDisplaySwitchExtendAsync(cancellationToken);
+        details.Add($"DisplaySwitch.exe exited with code {fallbackExitCode}");
+
+        _logger?.LogInformation(
+            "Waiting {DelayMs} ms for the extended topology to settle before retrying TV-only activation.",
+            (int)ExtendFallbackSettleDelay.TotalMilliseconds);
+        await Task.Delay(ExtendFallbackSettleDelay, cancellationToken);
+
+        var extendedConfiguration = QueryDisplayConfiguration(NativeMethods.QDC_ALL_PATHS);
+        var extendedContexts = BuildDisplayContexts(extendedConfiguration);
+        var refreshedTarget = extendedContexts.FirstOrDefault(context => context.Identifier.Matches(display));
+        if (refreshedTarget is null)
+        {
+            return OperationResult.Failure(
+                $"Activation fallback did not leave '{display}' connected.",
+                "display_switch_verification_failed",
+                outcome: "single_display_extend_fallback",
+                details: details);
+        }
+
+        details.Add("Attempting explicit single-display activation after extend fallback");
+        var retryResult = TryApplySingleDisplayDeviceSettings(
+            extendedContexts,
+            refreshedTarget,
+            targetMode,
+            dryRun: false,
+            details);
+
+        if (retryResult.Succeeded)
+        {
+            return OperationResult.Success(
+                retryResult.Message,
+                outcome: "single_display_device_settings_after_extend_fallback",
+                details: retryResult.Details);
+        }
+
+        return OperationResult.Failure(
+            retryResult.Message,
+            retryResult.ErrorCode,
+            outcome: "single_display_extend_fallback_failed",
+            details: retryResult.Details);
     }
 
     public async Task<OperationResult> RestoreSnapshotAsync(
@@ -203,7 +344,7 @@ public sealed class WindowsDisplayManager : IDisplayManager
         try
         {
             options ??= new RestoreSnapshotOptions();
-            var correlationId = Activity.Current?.Id ?? Guid.NewGuid().ToString("N");
+            var correlationId = GetCorrelationId();
             using var scope = _logger?.BeginScope(new Dictionary<string, object?>
             {
                 ["CorrelationId"] = correlationId
@@ -414,6 +555,12 @@ public sealed class WindowsDisplayManager : IDisplayManager
         };
     }
 
+    private static string GetCorrelationId() =>
+        Activity.Current?.GetBaggageItem("OperationId")
+        ?? Activity.Current?.GetTagItem("OperationId")?.ToString()
+        ?? Activity.Current?.Id
+        ?? Guid.NewGuid().ToString("N");
+
     private async Task<OperationResult> TryRestoreSingleDisplayAsync(
         DisplaySnapshot snapshot,
         RestorePlan plan,
@@ -500,10 +647,14 @@ public sealed class WindowsDisplayManager : IDisplayManager
         var fallbackExitCode = await _displaySystem.RunDisplaySwitchExtendAsync(cancellationToken);
         details.Add($"DisplaySwitch.exe exited with code {fallbackExitCode}");
 
+        _logger?.LogInformation(
+            "Waiting {DelayMs} ms for the extended desktop fallback topology to settle before retrying snapshot restoration.",
+            (int)ExtendFallbackSettleDelay.TotalMilliseconds);
+        await Task.Delay(ExtendFallbackSettleDelay, cancellationToken);
+
         var activeAfterFallback = BuildDisplayContexts(QueryDisplayConfiguration(NativeMethods.QDC_ONLY_ACTIVE_PATHS));
         var singleDisplayRecoveryResult = await TryRestoreSingleDisplayAfterFallbackAsync(
             snapshot,
-            activeAfterFallback,
             details,
             cancellationToken);
 
@@ -552,7 +703,6 @@ public sealed class WindowsDisplayManager : IDisplayManager
 
     private async Task<OperationResult?> TryRestoreSingleDisplayAfterFallbackAsync(
         DisplaySnapshot snapshot,
-        IReadOnlyList<DisplayPathContext> activeAfterFallback,
         List<string> seedDetails,
         CancellationToken cancellationToken)
     {
@@ -561,21 +711,25 @@ public sealed class WindowsDisplayManager : IDisplayManager
             return null;
         }
 
-        var plan = BuildRestorePlan(snapshot, activeAfterFallback);
-        if (plan.Strategy != BaselineRestoreStrategy.SingleDisplayDeviceSettings || plan.Matches.Count != 1)
+        var currentContexts = BuildDisplayContexts(QueryDisplayConfiguration(NativeMethods.QDC_ALL_PATHS));
+        var snapshotPath = snapshot.Paths.Single(static path => path.IsActive);
+        var snapshotDisplay = snapshot.Displays.FirstOrDefault(display => display.Identifier.Matches(snapshotPath.Identifier));
+        var matchedTarget = MatchSnapshotPath(snapshotPath, snapshotDisplay, currentContexts);
+        if (matchedTarget is null)
         {
             return null;
         }
 
+        var plan = BuildRestorePlan(snapshot, currentContexts);
         var details = new List<string>(seedDetails)
         {
             "Attempting explicit single-display restoration after emergency fallback"
         };
 
         var result = TryApplySingleDisplayDeviceSettings(
-            activeAfterFallback,
-            plan.Matches[0].Context,
-            plan.Matches[0].SnapshotPath,
+            currentContexts,
+            matchedTarget,
+            snapshotPath,
             dryRun: false,
             details);
 

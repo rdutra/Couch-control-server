@@ -8,6 +8,21 @@ public interface IDisplaySnapshotStore
         DisplaySnapshot snapshot,
         CancellationToken cancellationToken = default);
 
+    Task SavePendingAsync(
+        DisplaySnapshot snapshot,
+        CancellationToken cancellationToken = default);
+
     Task<DisplaySnapshot?> LoadLastDesktopSnapshotAsync(
+        CancellationToken cancellationToken = default);
+
+    Task<DisplaySnapshot?> LoadByIdAsync(
+        string snapshotId,
+        CancellationToken cancellationToken = default);
+
+    Task PromotePendingAsync(
+        string snapshotId,
+        CancellationToken cancellationToken = default);
+
+    Task ClearAsync(
         CancellationToken cancellationToken = default);
 }

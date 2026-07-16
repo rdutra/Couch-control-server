@@ -38,17 +38,34 @@ AppDomain.CurrentDomain.UnhandledException += (_, eventArgs) =>
 
 await AgentApiApplicationExtensions.InitializeAgentApiAsync(app.Services);
 var apiOptions = app.Services.GetRequiredService<AgentApiRuntimeOptionsProvider>();
-app.Urls.Add($"http://0.0.0.0:{apiOptions.Port}");
-await app.StartAsync();
+var apiHealthState = app.Services.GetRequiredService<IAgentApiHealthState>();
+if (apiOptions.BindingPlan.ListenUrls.Count > 0)
+{
+    foreach (var listenUrl in apiOptions.BindingPlan.ListenUrls)
+    {
+        app.Urls.Add(listenUrl);
+    }
+
+    await app.StartAsync();
+    apiHealthState.MarkListening(apiOptions.BindingPlan.ListenUrls);
+}
+else
+{
+    apiHealthState.MarkNotListening(apiOptions.BindingPlan.StatusMessage);
+}
 
 try
 {
     var applicationContext = services.GetRequiredService<AgentApplicationContext>();
+    applicationContext.StartStartupRecoveryCheck();
     Application.Run(applicationContext);
 }
 finally
 {
-    await app.StopAsync();
+    if (app.Urls.Count > 0)
+    {
+        await app.StopAsync();
+    }
 }
 
 static WebApplication CreateApp(string[] args)

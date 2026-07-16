@@ -85,9 +85,17 @@ public sealed class JsonAgentConfigurationStore : IAgentConfigurationStore
 
         public bool LaunchSteamAutomatically { get; init; } = true;
 
+        public bool AutomaticallyRecoverInterruptedDisplayOperations { get; init; }
+
         public string? SteamExecutablePath { get; init; }
 
+        public string? TvPreparationCommand { get; init; }
+
+        public int TvPreparationDelayMs { get; init; } = 4000;
+
         public int ApiPort { get; init; } = 47981;
+
+        public string? ApiListeningInterfaceId { get; init; }
 
         public string[] CorsAllowedOrigins { get; init; } = [];
 
@@ -103,8 +111,16 @@ public sealed class JsonAgentConfigurationStore : IAgentConfigurationStore
                 PreferredCouchHeight = PreferredCouchMode.Height,
                 PreferredCouchRefreshRateHz = PreferredCouchMode.RefreshRateHz,
                 LaunchSteamAutomatically = LaunchSteamAutomatically,
+                AutomaticallyRecoverInterruptedDisplayOperations = AutomaticallyRecoverInterruptedDisplayOperations,
                 SteamExecutablePath = SteamExecutablePath,
+                TvPreparationCommand = string.IsNullOrWhiteSpace(TvPreparationCommand)
+                    ? null
+                    : TvPreparationCommand.Trim(),
+                TvPreparationDelayMs = TvPreparationDelayMs is >= 0 and <= 60000 ? TvPreparationDelayMs : 4000,
                 ApiPort = ApiPort is >= 1 and <= 65535 ? ApiPort : 47981,
+                ApiListeningInterfaceId = string.IsNullOrWhiteSpace(ApiListeningInterfaceId)
+                    ? null
+                    : ApiListeningInterfaceId.Trim(),
                 CorsAllowedOrigins = CorsAllowedOrigins
                     .Where(static origin => !string.IsNullOrWhiteSpace(origin))
                     .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -122,8 +138,16 @@ public sealed class JsonAgentConfigurationStore : IAgentConfigurationStore
                 CouchDisplay = PersistedCouchDisplayIdentity.FromDomain(configuration.CouchDisplayIdentity),
                 PreferredCouchMode = PersistedDisplayMode.FromDomain(configuration.PreferredCouchMode),
                 LaunchSteamAutomatically = configuration.LaunchSteamAutomatically,
+                AutomaticallyRecoverInterruptedDisplayOperations = configuration.AutomaticallyRecoverInterruptedDisplayOperations,
                 SteamExecutablePath = configuration.SteamExecutablePath,
+                TvPreparationCommand = string.IsNullOrWhiteSpace(configuration.TvPreparationCommand)
+                    ? null
+                    : configuration.TvPreparationCommand.Trim(),
+                TvPreparationDelayMs = configuration.TvPreparationDelayMs,
                 ApiPort = configuration.ApiPort,
+                ApiListeningInterfaceId = string.IsNullOrWhiteSpace(configuration.ApiListeningInterfaceId)
+                    ? null
+                    : configuration.ApiListeningInterfaceId.Trim(),
                 CorsAllowedOrigins = configuration.CorsAllowedOrigins
                     .Where(static origin => !string.IsNullOrWhiteSpace(origin))
                     .Distinct(StringComparer.OrdinalIgnoreCase)

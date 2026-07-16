@@ -1,6 +1,7 @@
 using CouchControl.Core.Abstractions;
 using CouchControl.Core.Models;
 using Microsoft.Extensions.Logging;
+using System.Diagnostics;
 
 namespace CouchControl.Core.Orchestration;
 
@@ -14,6 +15,7 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
     private readonly IDisplayMatchingService displayMatchingService;
     private readonly ISteamLauncher steamLauncher;
     private readonly IDisplaySnapshotStore snapshotStore;
+    private readonly IDisplayOperationJournalStore journalStore;
     private readonly ILogger<ProfileOrchestrator> logger;
     private readonly TimeProvider timeProvider;
 
@@ -25,6 +27,7 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
         IDisplayMatchingService displayMatchingService,
         ISteamLauncher steamLauncher,
         IDisplaySnapshotStore snapshotStore,
+        IDisplayOperationJournalStore journalStore,
         ILogger<ProfileOrchestrator> logger,
         TimeProvider? timeProvider = null)
     {
@@ -33,6 +36,7 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
         this.displayMatchingService = displayMatchingService;
         this.steamLauncher = steamLauncher;
         this.snapshotStore = snapshotStore;
+        this.journalStore = journalStore;
         this.logger = logger;
         this.timeProvider = timeProvider ?? TimeProvider.System;
     }
@@ -68,6 +72,7 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
         var operationId = Guid.NewGuid();
         var startedAt = GetUtcNow();
         BeginOperation(operationId, AgentMode.Couch, ProfileOperationType.ActivateCouchMode, startedAt);
+        using var operationScope = BeginOperationLoggingScope(operationId, ProfileOperationType.ActivateCouchMode);
 
         try
         {
@@ -91,6 +96,32 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
                     AgentOperationState.Failed);
             }
 
+            var pendingJournal = await journalStore.LoadAsync(cancellationToken);
+            if (pendingJournal is { IsInProgress: true })
+            {
+                logger.LogWarning(
+                    "Rejected Couch Mode activation because interrupted recovery is still pending for rollback snapshot {SnapshotId}.",
+                    pendingJournal.RollbackSnapshotId);
+
+                return CompleteOperation(
+                    CreateResult(
+                        AgentMode.Couch,
+                        ProfileActivationStatus.Failure,
+                        OperationResult.Failure(
+                            "An interrupted display operation must be recovered before Couch Mode can run again.",
+                            "display_recovery_pending",
+                            outcome: "Failure",
+                            details:
+                            [
+                                $"Pending operation: {pendingJournal.OperationId}",
+                                $"Rollback snapshot: {pendingJournal.RollbackSnapshotId}"
+                            ]),
+                        null,
+                        operationId,
+                        startedAt),
+                    AgentOperationState.Failed);
+            }
+
             if (configuration.CouchDisplayIdentifier is null)
             {
                 return CompleteOperation(
@@ -107,17 +138,61 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
                     AgentOperationState.Failed);
             }
 
+            if (!string.IsNullOrWhiteSpace(configuration.TvPreparationCommand))
+            {
+                UpdateStep(ProfileOperationStep.Validating);
+                var preparationResult = await displayManager.PrepareForCouchModeAsync(configuration, cancellationToken);
+                if (!preparationResult.Succeeded)
+                {
+                    return CompleteOperation(
+                        CreateResult(
+                            AgentMode.Couch,
+                            ProfileActivationStatus.Failure,
+                            preparationResult,
+                            null,
+                            operationId,
+                            startedAt),
+                        AgentOperationState.Failed);
+                }
+            }
+
             UpdateStep(ProfileOperationStep.MatchingDisplay);
             var matchedDisplay = await MatchDisplayAsync(configuration, cancellationToken);
+
+            var lastDesktopSnapshot = await snapshotStore.LoadLastDesktopSnapshotAsync(cancellationToken);
+            if (lastDesktopSnapshot is null)
+            {
+                return CompleteOperation(
+                    CreateResult(
+                        AgentMode.Couch,
+                        ProfileActivationStatus.Failure,
+                        OperationResult.Failure(
+                            "A desktop snapshot must be captured manually before couch mode can be activated.",
+                            "desktop_snapshot_missing",
+                            outcome: "Failure"),
+                        null,
+                        operationId,
+                        startedAt),
+                    AgentOperationState.Failed);
+            }
 
             UpdateStep(ProfileOperationStep.CapturingSnapshot);
             var snapshot = await displayManager.CaptureSnapshotAsync(cancellationToken);
 
             UpdateStep(ProfileOperationStep.PersistingSnapshot);
-            await snapshotStore.SaveAsync(snapshot, cancellationToken);
+            await snapshotStore.SavePendingAsync(snapshot, cancellationToken);
+            await journalStore.SaveAsync(
+                new DisplayOperationJournal(
+                    operationId,
+                    DisplayOperationJournalTypes.ActivateCouch,
+                    DisplayOperationJournalStates.InProgress,
+                    snapshot.SnapshotId,
+                    startedAt),
+                cancellationToken);
 
             UpdateStep(ProfileOperationStep.ActivatingDisplay);
             var displayResult = await ActivateDisplayAsync(
+                configuration,
                 matchedDisplay.Identifier,
                 configuration.PreferredCouchMode,
                 dryRun,
@@ -126,6 +201,11 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
 
             if (!displayResult.Succeeded)
             {
+                if (displayResult.RollbackResult?.Succeeded == true)
+                {
+                    await CompleteJournalAsync(operationId, cancellationToken);
+                }
+
                 return CompleteOperation(
                     CreateResult(
                         AgentMode.Couch,
@@ -140,6 +220,7 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
 
             if (!configuration.LaunchSteamAutomatically)
             {
+                await CompleteJournalAsync(operationId, cancellationToken);
                 return CompleteOperation(
                     CreateResult(
                         AgentMode.Couch,
@@ -164,6 +245,7 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
             UpdateStep(ProfileOperationStep.LaunchingSteam);
             if (!steamLauncher.IsInstalled(configuration))
             {
+                await CompleteJournalAsync(operationId, cancellationToken);
                 return CompleteOperation(
                     CreateResult(
                         AgentMode.Couch,
@@ -194,6 +276,7 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
                 ? AgentOperationState.Succeeded
                 : AgentOperationState.PartiallySucceeded;
 
+            await CompleteJournalAsync(operationId, cancellationToken);
             return CompleteOperation(
                 CreateResult(
                     AgentMode.Couch,
@@ -264,13 +347,18 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
         var operationId = Guid.NewGuid();
         var startedAt = GetUtcNow();
         BeginOperation(operationId, AgentMode.Desktop, ProfileOperationType.ActivateDesktopMode, startedAt);
+        using var operationScope = BeginOperationLoggingScope(operationId, ProfileOperationType.ActivateDesktopMode);
 
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
 
             UpdateStep(ProfileOperationStep.LoadingSnapshot);
-            var snapshot = await snapshotStore.LoadLastDesktopSnapshotAsync(cancellationToken);
+            var pendingJournal = await journalStore.LoadAsync(cancellationToken);
+            var recoveringInterruptedOperation = pendingJournal is { IsInProgress: true };
+            var snapshot = recoveringInterruptedOperation
+                ? await snapshotStore.LoadByIdAsync(pendingJournal!.RollbackSnapshotId, cancellationToken)
+                : await snapshotStore.LoadLastDesktopSnapshotAsync(cancellationToken);
             if (snapshot is null)
             {
                 return CompleteOperation(
@@ -278,8 +366,12 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
                         AgentMode.Desktop,
                         ProfileActivationStatus.Failure,
                         OperationResult.Failure(
-                            "No desktop snapshot is available to restore.",
-                            "desktop_snapshot_missing",
+                            recoveringInterruptedOperation
+                                ? $"The rollback snapshot '{pendingJournal!.RollbackSnapshotId}' is missing, so the interrupted display operation cannot be recovered."
+                                : "No desktop snapshot is available to restore.",
+                            recoveringInterruptedOperation
+                                ? "rollback_snapshot_missing"
+                                : "desktop_snapshot_missing",
                             outcome: "Failure"),
                         null,
                         operationId,
@@ -304,6 +396,11 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
                 ProfileActivationStatus.PartialSuccess => AgentOperationState.PartiallySucceeded,
                 _ => AgentOperationState.Failed
             };
+
+            if (recoveringInterruptedOperation && displayResult.Succeeded)
+            {
+                await journalStore.SaveAsync(pendingJournal!.MarkRecovered(GetUtcNow()), cancellationToken);
+            }
 
             return CompleteOperation(
                 CreateResult(
@@ -350,14 +447,24 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
     {
         try
         {
-            var connectedDisplays = await displayManager.GetDisplaysAsync(cancellationToken);
+            try
+            {
+                return await MatchConnectedDisplayAsync(configuration, cancellationToken);
+            }
+            catch (InvalidOperationException ex) when (!string.IsNullOrWhiteSpace(configuration.TvPreparationCommand))
+            {
+                logger.LogInformation(
+                    ex,
+                    "Configured TV was not detected. Running the configured TV preparation command before retrying display detection.");
 
-            return configuration.CouchDisplayIdentity is not null
-                ? displayMatchingService.MatchDisplay(configuration.CouchDisplayIdentity, connectedDisplays)
-                : connectedDisplays.FirstOrDefault(display =>
-                    display.Identifier.Matches(configuration.CouchDisplayIdentifier!)) ??
-                    throw new InvalidOperationException(
-                        $"Configured TV '{configuration.CouchDisplayIdentifier}' is not connected.");
+                var preparationResult = await displayManager.PrepareForCouchModeAsync(configuration, cancellationToken);
+                if (!preparationResult.Succeeded)
+                {
+                    throw new InvalidOperationException(preparationResult.Message);
+                }
+
+                return await MatchConnectedDisplayAsync(configuration, cancellationToken);
+            }
         }
         catch (OperationCanceledException)
         {
@@ -372,7 +479,22 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
         }
     }
 
+    private async Task<DisplayDevice> MatchConnectedDisplayAsync(
+        AgentConfiguration configuration,
+        CancellationToken cancellationToken)
+    {
+        var connectedDisplays = await displayManager.GetDisplaysAsync(cancellationToken);
+
+        return configuration.CouchDisplayIdentity is not null
+            ? displayMatchingService.MatchDisplay(configuration.CouchDisplayIdentity, connectedDisplays)
+            : connectedDisplays.FirstOrDefault(display =>
+                display.Identifier.Matches(configuration.CouchDisplayIdentifier!)) ??
+                throw new InvalidOperationException(
+                    $"Configured TV '{configuration.CouchDisplayIdentifier}' is not connected.");
+    }
+
     private async Task<OperationResult> ActivateDisplayAsync(
+        AgentConfiguration configuration,
         DisplayIdentifier displayIdentifier,
         DisplayMode preferredMode,
         bool dryRun,
@@ -390,6 +512,33 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
             if (displayResult.Succeeded)
             {
                 return displayResult;
+            }
+
+            if (!dryRun &&
+                string.Equals(displayResult.ErrorCode, "display_switch_verification_failed", StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(configuration.TvPreparationCommand))
+            {
+                logger.LogInformation(
+                    "Display activation verification failed. Running the configured TV preparation command and retrying once.");
+
+                var preparationResult = await displayManager.PrepareForCouchModeAsync(configuration, cancellationToken);
+                if (!preparationResult.Succeeded)
+                {
+                    return await EnsureRollbackAsync(preparationResult, snapshot, dryRun, cancellationToken);
+                }
+
+                var retryResult = await displayManager.ActivateOnlyAsync(
+                    displayIdentifier,
+                    preferredMode,
+                    dryRun,
+                    cancellationToken);
+
+                if (retryResult.Succeeded)
+                {
+                    return retryResult;
+                }
+
+                return await EnsureRollbackAsync(retryResult, snapshot, dryRun, cancellationToken);
             }
 
             return await EnsureRollbackAsync(displayResult, snapshot, dryRun, cancellationToken);
@@ -598,4 +747,42 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
                 : result.DisplayResult.Message;
 
     private DateTimeOffset GetUtcNow() => timeProvider.GetUtcNow();
+
+    private IDisposable? BeginOperationLoggingScope(Guid operationId, ProfileOperationType operationType)
+    {
+        var activity = new Activity(operationType.ToString());
+        activity.SetIdFormat(ActivityIdFormat.W3C);
+        activity.SetTag("OperationId", operationId.ToString());
+        activity.AddBaggage("OperationId", operationId.ToString());
+        activity.Start();
+
+        return new CompositeDisposable(
+            logger.BeginScope(new Dictionary<string, object?>
+            {
+                ["CorrelationId"] = operationId,
+                ["OperationType"] = operationType.ToString()
+            }),
+            activity);
+    }
+
+    private async Task CompleteJournalAsync(Guid operationId, CancellationToken cancellationToken)
+    {
+        var journal = await journalStore.LoadAsync(cancellationToken);
+        if (journal is null || journal.OperationId != operationId || !journal.IsInProgress)
+        {
+            return;
+        }
+
+        await journalStore.SaveAsync(journal.MarkCompleted(GetUtcNow()), cancellationToken);
+    }
+
+    private sealed class CompositeDisposable(IDisposable? scope, Activity activity) : IDisposable
+    {
+        public void Dispose()
+        {
+            scope?.Dispose();
+            activity.Stop();
+            activity.Dispose();
+        }
+    }
 }

@@ -80,7 +80,17 @@ Inspect the saved configuration:
 CouchControl.Cli configure show
 ```
 
-### 3. Validate couch mode once from the CLI
+### 3. Capture the desktop snapshot manually
+
+Before the first `couch` run, save the desktop layout that `desktop` should restore later:
+
+```bash
+CouchControl.Cli snapshot capture
+```
+
+`couch` now requires an existing saved desktop snapshot and does not overwrite it automatically.
+
+### 4. Validate couch mode once from the CLI
 
 Run a dry run before the first real switch on a machine or TV setup:
 
@@ -100,7 +110,7 @@ Restore desktop mode on demand:
 CouchControl.Cli desktop
 ```
 
-### 4. Run the tray agent for day-to-day use
+### 5. Run the tray agent for day-to-day use
 
 After the initial configuration is in place, start `CouchControl.Agent.exe` in the logged-in user's Windows session. The tray menu provides:
 
@@ -112,7 +122,7 @@ After the initial configuration is in place, start `CouchControl.Agent.exe` in t
 - `View Logs`
 - `Start with Windows`
 
-### 5. Publish Windows executables
+### 6. Publish Windows executables
 
 Both publish scripts now generate separate CLI and tray-agent outputs:
 
@@ -177,6 +187,8 @@ After configuring the target TV and preferred mode, activate couch mode with:
 CouchControl.Cli couch
 ```
 
+`couch` requires a saved desktop snapshot from `CouchControl.Cli snapshot capture`. The command captures a temporary rollback snapshot for the current run, but it does not replace the saved desktop baseline.
+
 To validate the configured TV selection and mode resolution without calling `SetDisplayConfig`, use:
 
 ```bash
@@ -187,7 +199,6 @@ Expected high-level console output:
 
 ```text
 TV detected: Samsung TV
-Desktop configuration saved
 Switching to TV-only topology
 Applying 3840x2160 at 60 Hz
 Verifying display configuration
@@ -258,7 +269,21 @@ Before switching displays, verify the saved target and preferred mode:
 .\src\CouchControl.Cli\bin\Debug\net10.0\CouchControl.Cli.exe configure show
 ```
 
-#### 6. Run a dry run first
+#### 6. Capture the desktop snapshot manually
+
+Save the desktop layout that `desktop` should restore later:
+
+```powershell
+.\src\CouchControl.Cli\bin\Debug\net10.0\CouchControl.Cli.exe snapshot capture
+```
+
+Important:
+
+- `couch` requires this saved snapshot to exist.
+- `couch` does not overwrite the saved desktop snapshot.
+- If you want a different desktop baseline later, run `snapshot capture` again yourself.
+
+#### 7. Run a dry run first
 
 This validates the configured TV match and the native display mode selection without applying `SetDisplayConfig`:
 
@@ -268,7 +293,7 @@ This validates the configured TV match and the native display mode selection wit
 
 Use the dry run before every first attempt on a new TV, GPU driver version, cable path, or dock/receiver configuration.
 
-#### 7. Run the real switch
+#### 8. Run the real switch
 
 Once dry run succeeds:
 
@@ -278,13 +303,14 @@ Once dry run succeeds:
 
 Expected behavior:
 
-- The current desktop topology is captured and saved first.
+- The saved manual desktop snapshot remains unchanged.
+- The current topology is captured only as a temporary rollback snapshot for the active `couch` run.
 - Windows is switched to TV-only mode using native `SetDisplayConfig`.
 - The configured resolution and refresh rate are applied when a safe supported mode exists.
 - The topology is re-queried and verified after the switch.
-- If switching or verification fails, CouchControl attempts to restore the saved desktop snapshot.
+- If switching or verification fails, CouchControl attempts to restore the temporary rollback snapshot captured for that run.
 
-#### 8. Verify the result live
+#### 9. Verify the result live
 
 After the command returns:
 
@@ -299,17 +325,17 @@ You can also re-run display enumeration:
 .\src\CouchControl.Cli\bin\Debug\net10.0\CouchControl.Cli.exe displays
 ```
 
-#### 9. Check the saved desktop snapshot
+#### 10. Check the saved desktop snapshot
 
-The last captured desktop snapshot can be inspected with:
+The manually saved desktop snapshot can be inspected with:
 
 ```powershell
 .\src\CouchControl.Cli\bin\Debug\net10.0\CouchControl.Cli.exe snapshot show
 ```
 
-This is useful when diagnosing why rollback or later desktop restore logic did or did not match the previous topology.
+This is useful when diagnosing why later `desktop` restore logic did or did not match the intended baseline.
 
-#### 10. Start the tray agent
+#### 11. Start the tray agent
 
 Once the CLI configuration is correct, start the tray agent for normal usage:
 
@@ -327,6 +353,7 @@ Expected behavior:
 ### Current Limitations For Live Testing
 
 - TV selection and preferred display mode are still configured through the CLI; the tray settings window currently exposes status, Steam auto-launch, and start-with-Windows behavior rather than full display selection.
+- `desktop` restores only the snapshot you saved manually with `snapshot capture`; Couch mode no longer refreshes that baseline automatically.
 - Rollback is attempted automatically only when the switch or post-switch verification fails during the `couch` operation.
 - Native integration tests are intentionally skipped by default because they would change active displays during a normal test run.
 
@@ -401,4 +428,20 @@ CouchControl.Cli configure set-steam --enabled true
 Prints the current configuration state:
 ```bash
 CouchControl.Cli configure show
+```
+
+### Snapshot Management
+
+The desktop restore baseline is managed manually.
+
+#### 1. Capture Desktop Snapshot
+Saves the current desktop topology as the baseline that `desktop` should restore later:
+```bash
+CouchControl.Cli snapshot capture
+```
+
+#### 2. Show Saved Desktop Snapshot
+Displays the currently saved desktop baseline:
+```bash
+CouchControl.Cli snapshot show
 ```

@@ -12,7 +12,8 @@ namespace CouchControl.Windows.Persistence;
 public sealed class JsonDisplaySnapshotStore : IDisplaySnapshotStore
 {
     private const int CurrentSchemaVersion = 1;
-    private readonly string _filePath;
+    private readonly string filePath;
+    private readonly string snapshotsDirectory;
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true
@@ -21,36 +22,39 @@ public sealed class JsonDisplaySnapshotStore : IDisplaySnapshotStore
     public JsonDisplaySnapshotStore()
     {
         string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        _filePath = Path.Combine(localAppData, "CouchControl", "snapshots", "last-desktop.json");
+        snapshotsDirectory = Path.Combine(localAppData, "CouchControl", "snapshots");
+        filePath = Path.Combine(snapshotsDirectory, "last-desktop.json");
     }
 
     public JsonDisplaySnapshotStore(string filePath)
     {
-        _filePath = filePath;
+        this.filePath = filePath;
+        snapshotsDirectory = Path.GetDirectoryName(filePath)
+            ?? throw new InvalidOperationException($"Cannot determine snapshot directory for '{filePath}'.");
     }
 
     public async Task<DisplaySnapshot?> LoadLastDesktopSnapshotAsync(CancellationToken cancellationToken = default)
     {
-        if (!File.Exists(_filePath))
+        if (!File.Exists(filePath))
         {
             return null;
         }
 
         var persisted = await AtomicJsonFile.ReadAsync<PersistedDisplaySnapshot>(
-            _filePath,
+            filePath,
             JsonOptions,
             cancellationToken);
 
         if (persisted == null)
         {
             throw new InvalidOperationException(
-                $"Failed to load display snapshot from '{_filePath}': the file is empty.");
+                $"Failed to load display snapshot from '{filePath}': the file is empty.");
         }
 
         if (persisted.SchemaVersion <= 0)
         {
             throw new InvalidOperationException(
-                $"Failed to load display snapshot from '{_filePath}': schemaVersion must be a positive integer.");
+                $"Failed to load display snapshot from '{filePath}': schemaVersion must be a positive integer.");
         }
 
         var snapshot = persisted.ToDomain();
@@ -58,7 +62,7 @@ public sealed class JsonDisplaySnapshotStore : IDisplaySnapshotStore
         if (!validation.Succeeded)
         {
             throw new InvalidOperationException(
-                $"Failed to load display snapshot from '{_filePath}': {validation.Message}");
+                $"Failed to load display snapshot from '{filePath}': {validation.Message}");
         }
 
         return snapshot;
@@ -74,15 +78,82 @@ public sealed class JsonDisplaySnapshotStore : IDisplaySnapshotStore
             throw new InvalidOperationException($"Cannot save invalid display snapshot: {validation.Message}");
         }
 
-        string? directory = Path.GetDirectoryName(_filePath);
+        string? directory = Path.GetDirectoryName(filePath);
         if (!string.IsNullOrEmpty(directory))
         {
             Directory.CreateDirectory(directory);
         }
 
         var persisted = PersistedDisplaySnapshot.FromDomain(snapshot);
-        await AtomicJsonFile.WriteAsync(_filePath, persisted, JsonOptions, cancellationToken);
+        await AtomicJsonFile.WriteAsync(filePath, persisted, JsonOptions, cancellationToken);
+        await AtomicJsonFile.WriteAsync(GetSnapshotFilePath(snapshot.SnapshotId), persisted, JsonOptions, cancellationToken);
     }
+
+    public async Task SavePendingAsync(DisplaySnapshot snapshot, CancellationToken cancellationToken = default)
+    {
+        if (snapshot == null) throw new ArgumentNullException(nameof(snapshot));
+
+        var validation = snapshot.Validate();
+        if (!validation.Succeeded)
+        {
+            throw new InvalidOperationException($"Cannot save invalid display snapshot: {validation.Message}");
+        }
+
+        Directory.CreateDirectory(snapshotsDirectory);
+        await AtomicJsonFile.WriteAsync(
+            GetSnapshotFilePath(snapshot.SnapshotId),
+            PersistedDisplaySnapshot.FromDomain(snapshot),
+            JsonOptions,
+            cancellationToken);
+    }
+
+    public async Task<DisplaySnapshot?> LoadByIdAsync(string snapshotId, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(snapshotId))
+        {
+            throw new ArgumentException("A snapshot ID must be provided.", nameof(snapshotId));
+        }
+
+        string pendingPath = GetSnapshotFilePath(snapshotId);
+        if (!File.Exists(pendingPath))
+        {
+            return null;
+        }
+
+        var persisted = await AtomicJsonFile.ReadAsync<PersistedDisplaySnapshot>(pendingPath, JsonOptions, cancellationToken);
+        if (persisted == null)
+        {
+            throw new InvalidOperationException(
+                $"Failed to load display snapshot from '{pendingPath}': the file is empty.");
+        }
+
+        return persisted.ToDomain();
+    }
+
+    public async Task PromotePendingAsync(string snapshotId, CancellationToken cancellationToken = default)
+    {
+        var snapshot = await LoadByIdAsync(snapshotId, cancellationToken);
+        if (snapshot is null)
+        {
+            throw new InvalidOperationException(
+                $"Cannot promote rollback snapshot '{snapshotId}' because it does not exist.");
+        }
+
+        await SaveAsync(snapshot, cancellationToken);
+    }
+
+    public Task ClearAsync(CancellationToken cancellationToken = default)
+    {
+        if (File.Exists(filePath))
+        {
+            File.Delete(filePath);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private string GetSnapshotFilePath(string snapshotId) =>
+        Path.Combine(snapshotsDirectory, $"{snapshotId}.json");
 
     private sealed record PersistedDisplaySnapshot
     {

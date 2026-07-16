@@ -7,6 +7,7 @@ using CouchControl.Core.Abstractions;
 using CouchControl.Core.Models;
 using CouchControl.Windows;
 using CouchControl.Windows.AgentApi;
+using CouchControl.Windows.Recovery;
 using CouchControl.Windows.Runtime;
 using CouchControl.Windows.Startup;
 using Microsoft.Extensions.Logging;
@@ -20,38 +21,59 @@ public sealed class AgentApplicationContext : ApplicationContext
     private readonly NotifyIcon notifyIcon;
     private readonly ToolStripMenuItem activateCouchModeItem;
     private readonly ToolStripMenuItem restoreDesktopModeItem;
+    private readonly ToolStripMenuItem pairDeviceItem;
+    private readonly ToolStripMenuItem saveDesktopSnapshotItem;
+    private readonly ToolStripMenuItem clearDesktopSnapshotItem;
     private readonly ToolStripMenuItem startWithWindowsItem;
     private readonly ToolStripMenuItem exitItem;
     private readonly Control uiInvoker;
     private readonly IAgentApiOperationService operationService;
     private readonly IAgentStatusService agentStatusService;
     private readonly IAgentConfigurationStore configurationStore;
+    private readonly IDisplayManager displayManager;
+    private readonly IDisplaySnapshotStore snapshotStore;
+    private readonly IDisplayRecoveryCoordinator recoveryCoordinator;
     private readonly IStartupRegistration startupRegistration;
     private readonly ISingleInstanceCoordinator singleInstanceCoordinator;
     private readonly IAgentLogFileAccessor logFileAccessor;
     private readonly CouchControlPaths paths;
     private readonly ILogger<AgentApplicationContext> logger;
+    private readonly IPairingService pairingService;
     private readonly string startupCommandLine;
     private readonly StatusForm statusForm;
+    private readonly NetworkDiagnosticsForm diagnosticsForm;
     private readonly SettingsForm settingsForm;
+    private readonly PairingCodeForm pairingCodeForm;
+    private bool startupRegistrationEnabled;
 
     public AgentApplicationContext(
         IAgentApiOperationService operationService,
         IAgentStatusService agentStatusService,
         IAgentConfigurationStore configurationStore,
+        IDisplayManager displayManager,
+        IDisplaySnapshotStore snapshotStore,
+        IDisplayRecoveryCoordinator recoveryCoordinator,
         IStartupRegistration startupRegistration,
         ISingleInstanceCoordinator singleInstanceCoordinator,
         IAgentLogFileAccessor logFileAccessor,
         IApiTokenStore apiTokenStore,
+        IPairingService pairingService,
+        IAgentNetworkDiagnosticsService diagnosticsService,
+        ILocalNetworkInterfaceProvider networkInterfaceProvider,
+        IWindowsFirewallRuleManager firewallRuleManager,
         CouchControlPaths paths,
         ILogger<AgentApplicationContext> logger)
     {
         this.operationService = operationService;
         this.agentStatusService = agentStatusService;
         this.configurationStore = configurationStore;
+        this.displayManager = displayManager;
+        this.snapshotStore = snapshotStore;
+        this.recoveryCoordinator = recoveryCoordinator;
         this.startupRegistration = startupRegistration;
         this.singleInstanceCoordinator = singleInstanceCoordinator;
         this.logFileAccessor = logFileAccessor;
+        this.pairingService = pairingService;
         this.paths = paths;
         this.logger = logger;
 
@@ -60,28 +82,48 @@ public sealed class AgentApplicationContext : ApplicationContext
 
         uiInvoker = new Control();
         uiInvoker.CreateControl();
+        startupRegistrationEnabled = startupRegistration.IsEnabled(ApplicationName);
 
-        activateCouchModeItem = new ToolStripMenuItem("Activate Couch Mode", null, (_, _) => StartCouchMode());
-        restoreDesktopModeItem = new ToolStripMenuItem("Restore Desktop Mode", null, (_, _) => StartDesktopMode());
-        startWithWindowsItem = new ToolStripMenuItem("Start with Windows", null, (_, _) => ToggleStartupRegistration())
+        activateCouchModeItem = new ToolStripMenuItem("Activate Couch Mode", null, (_, _) => QueueUiAction(StartCouchMode));
+        restoreDesktopModeItem = new ToolStripMenuItem("Restore Desktop Mode", null, (_, _) => QueueUiAction(StartDesktopMode));
+        pairDeviceItem = new ToolStripMenuItem("Pair Device", null, (_, _) => QueueUiAction(StartPairingAsync));
+        saveDesktopSnapshotItem = new ToolStripMenuItem("Save Current Desktop Snapshot", null, (_, _) => QueueUiAction(SaveCurrentDesktopSnapshotAsync));
+        clearDesktopSnapshotItem = new ToolStripMenuItem("Clear Saved Desktop Snapshot", null, (_, _) => QueueUiAction(ClearDesktopSnapshotAsync));
+        startWithWindowsItem = new ToolStripMenuItem("Start with Windows", null, (_, _) => QueueUiAction(ToggleStartupRegistration))
         {
             CheckOnClick = true
         };
-        exitItem = new ToolStripMenuItem("Exit", null, (_, _) => ExitApplication());
+        exitItem = new ToolStripMenuItem("Exit", null, (_, _) => QueueUiAction(ExitApplication));
 
-        statusForm = new StatusForm(agentStatusService);
-        settingsForm = new SettingsForm(configurationStore, startupRegistration, startupCommandLine, apiTokenStore);
+        statusForm = new StatusForm(
+            agentStatusService,
+            SaveCurrentDesktopSnapshotAsync,
+            ClearDesktopSnapshotAsync);
+        diagnosticsForm = new NetworkDiagnosticsForm(diagnosticsService);
+        settingsForm = new SettingsForm(
+            configurationStore,
+            startupRegistration,
+            startupCommandLine,
+            apiTokenStore,
+            networkInterfaceProvider,
+            firewallRuleManager);
+        pairingCodeForm = new PairingCodeForm(pairingService);
 
         var contextMenu = new ContextMenuStrip();
         contextMenu.Opening += (_, _) => RefreshMenuState();
         contextMenu.Items.Add(new ToolStripMenuItem("Couch Control") { Enabled = false });
         contextMenu.Items.Add(activateCouchModeItem);
         contextMenu.Items.Add(restoreDesktopModeItem);
+        contextMenu.Items.Add(pairDeviceItem);
         contextMenu.Items.Add(new ToolStripSeparator());
-        contextMenu.Items.Add(new ToolStripMenuItem("Status", null, (_, _) => ShowStatusWindow()));
-        contextMenu.Items.Add(new ToolStripMenuItem("Settings", null, async (_, _) => await ShowSettingsWindowAsync()));
-        contextMenu.Items.Add(new ToolStripMenuItem("Show Configuration Folder", null, (_, _) => OpenDirectory(paths.RootDirectory)));
-        contextMenu.Items.Add(new ToolStripMenuItem("View Logs", null, (_, _) => OpenLogs()));
+        contextMenu.Items.Add(saveDesktopSnapshotItem);
+        contextMenu.Items.Add(clearDesktopSnapshotItem);
+        contextMenu.Items.Add(new ToolStripSeparator());
+        contextMenu.Items.Add(new ToolStripMenuItem("Status", null, (_, _) => QueueUiAction(ShowStatusWindow)));
+        contextMenu.Items.Add(new ToolStripMenuItem("Network Diagnostics", null, (_, _) => QueueUiAction(ShowDiagnosticsWindowAsync)));
+        contextMenu.Items.Add(new ToolStripMenuItem("Settings", null, (_, _) => QueueUiAction(ShowSettingsWindowAsync)));
+        contextMenu.Items.Add(new ToolStripMenuItem("Show Configuration Folder", null, (_, _) => QueueUiAction(() => OpenDirectory(paths.RootDirectory))));
+        contextMenu.Items.Add(new ToolStripMenuItem("View Logs", null, (_, _) => QueueUiAction(OpenLogs)));
         contextMenu.Items.Add(new ToolStripSeparator());
         contextMenu.Items.Add(startWithWindowsItem);
         contextMenu.Items.Add(exitItem);
@@ -110,18 +152,26 @@ public sealed class AgentApplicationContext : ApplicationContext
             notifyIcon.Visible = false;
             notifyIcon.Dispose();
             statusForm.Dispose();
+            diagnosticsForm.Dispose();
             settingsForm.Dispose();
+            pairingCodeForm.Dispose();
             uiInvoker.Dispose();
         }
 
         base.Dispose(disposing);
     }
 
+    public void StartStartupRecoveryCheck() =>
+        uiInvoker.BeginInvoke(async () => await RunStartupRecoveryCheckAsync());
+
     private void RefreshMenuState()
     {
-        startWithWindowsItem.Checked = startupRegistration.IsEnabled(ApplicationName);
+        startWithWindowsItem.Checked = startupRegistrationEnabled;
         activateCouchModeItem.Enabled = !operationService.IsOperationRunning;
         restoreDesktopModeItem.Enabled = !operationService.IsOperationRunning;
+        pairDeviceItem.Enabled = !operationService.IsOperationRunning;
+        saveDesktopSnapshotItem.Enabled = !operationService.IsOperationRunning;
+        clearDesktopSnapshotItem.Enabled = !operationService.IsOperationRunning;
         startWithWindowsItem.Enabled = !operationService.IsOperationRunning;
         exitItem.Enabled = !operationService.IsOperationRunning;
     }
@@ -159,7 +209,64 @@ public sealed class AgentApplicationContext : ApplicationContext
         notifyIcon.ShowBalloonTip(5000, title, message, icon);
     }
 
-    private void ToggleStartupRegistration()
+    private async Task RunStartupRecoveryCheckAsync()
+    {
+        try
+        {
+            var check = await recoveryCoordinator.CheckAsync();
+            if (check.Issue == DisplayRecoveryIssue.None)
+            {
+                return;
+            }
+
+            notifyIcon.ShowBalloonTip(
+                5000,
+                "Display recovery required",
+                check.Message,
+                check.Issue == DisplayRecoveryIssue.InterruptedOperation ? ToolTipIcon.Warning : ToolTipIcon.Error);
+
+            using var dialog = new RecoveryDialogForm(check.Message, check.AutomaticRecoveryConfigured);
+            while (true)
+            {
+                var choice = dialog.ShowDialog();
+                if (choice == DialogResult.Retry)
+                {
+                    OpenLogs();
+                    continue;
+                }
+
+                if (choice == DialogResult.Yes)
+                {
+                    var recovery = await recoveryCoordinator.RecoverAsync();
+                    notifyIcon.ShowBalloonTip(
+                        5000,
+                        recovery.Succeeded ? "Desktop restored" : "Recovery failed",
+                        recovery.Message,
+                        recovery.Succeeded ? ToolTipIcon.Info : ToolTipIcon.Error);
+
+                    if (!recovery.Succeeded)
+                    {
+                        MessageBox.Show(
+                            $"{recovery.Message}{Environment.NewLine}{Environment.NewLine}Open the latest logs and restore the desktop layout manually before retrying.",
+                            "Recovery Failed",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Error);
+                    }
+
+                    return;
+                }
+
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Startup recovery check failed.");
+            notifyIcon.ShowBalloonTip(5000, "Recovery check failed", ex.Message, ToolTipIcon.Error);
+        }
+    }
+
+    private Task ToggleStartupRegistration()
     {
         try
         {
@@ -167,13 +274,16 @@ public sealed class AgentApplicationContext : ApplicationContext
                 ApplicationName,
                 startupCommandLine,
                 startWithWindowsItem.Checked);
+            startupRegistrationEnabled = startWithWindowsItem.Checked;
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Failed to update startup registration.");
             notifyIcon.ShowBalloonTip(5000, "Failure", ex.Message, ToolTipIcon.Error);
-            startWithWindowsItem.Checked = startupRegistration.IsEnabled(ApplicationName);
+            startWithWindowsItem.Checked = startupRegistrationEnabled;
         }
+
+        return Task.CompletedTask;
     }
 
     private void ShowStatusWindow()
@@ -188,6 +298,94 @@ public sealed class AgentApplicationContext : ApplicationContext
         settingsForm.Show();
         settingsForm.BringToFront();
         await settingsForm.LoadCurrentValuesAsync();
+    }
+
+    private async Task ShowDiagnosticsWindowAsync()
+    {
+        diagnosticsForm.Show();
+        diagnosticsForm.BringToFront();
+        await diagnosticsForm.RefreshNowAsync();
+    }
+
+    private async Task StartPairingAsync()
+    {
+        try
+        {
+            var session = await pairingService.StartAsync();
+            await pairingCodeForm.ShowSessionAsync(session);
+            notifyIcon.ShowBalloonTip(5000, "Pairing enabled", $"Code {session.PairingCode} is active for five minutes.", ToolTipIcon.Info);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to start pairing.");
+            notifyIcon.ShowBalloonTip(5000, "Failure", ex.Message, ToolTipIcon.Error);
+        }
+    }
+
+    private async Task SaveCurrentDesktopSnapshotAsync()
+    {
+        try
+        {
+            var existingSnapshot = await snapshotStore.LoadLastDesktopSnapshotAsync();
+            if (existingSnapshot is not null)
+            {
+                var overwrite = MessageBox.Show(
+                    $"A desktop snapshot from {existingSnapshot.CapturedAtUtc.LocalDateTime:g} already exists. Replace it with the current desktop layout?",
+                    "Replace Desktop Snapshot",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question);
+
+                if (overwrite != DialogResult.Yes)
+                {
+                    return;
+                }
+            }
+
+            var snapshot = await displayManager.CaptureSnapshotAsync();
+            await snapshotStore.SaveAsync(snapshot);
+            notifyIcon.ShowBalloonTip(
+                5000,
+                "Desktop snapshot saved",
+                $"Saved current desktop layout from {snapshot.CapturedAtUtc.LocalDateTime:g}.",
+                ToolTipIcon.Info);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to save desktop snapshot.");
+            notifyIcon.ShowBalloonTip(5000, "Failure", ex.Message, ToolTipIcon.Error);
+        }
+    }
+
+    private async Task ClearDesktopSnapshotAsync()
+    {
+        try
+        {
+            var existingSnapshot = await snapshotStore.LoadLastDesktopSnapshotAsync();
+            if (existingSnapshot is null)
+            {
+                notifyIcon.ShowBalloonTip(5000, "No snapshot saved", "There is no saved desktop snapshot to clear.", ToolTipIcon.Info);
+                return;
+            }
+
+            var confirmed = MessageBox.Show(
+                $"Delete the saved desktop snapshot from {existingSnapshot.CapturedAtUtc.LocalDateTime:g}?",
+                "Clear Desktop Snapshot",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning);
+
+            if (confirmed != DialogResult.Yes)
+            {
+                return;
+            }
+
+            await snapshotStore.ClearAsync();
+            notifyIcon.ShowBalloonTip(5000, "Desktop snapshot cleared", "The saved desktop restore snapshot was removed.", ToolTipIcon.Info);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to clear desktop snapshot.");
+            notifyIcon.ShowBalloonTip(5000, "Failure", ex.Message, ToolTipIcon.Error);
+        }
     }
 
     private void OpenDirectory(string path)
@@ -228,6 +426,26 @@ public sealed class AgentApplicationContext : ApplicationContext
     private void ExitApplication()
     {
         ExitThread();
+    }
+
+    private void QueueUiAction(Action action)
+    {
+        if (uiInvoker.IsDisposed)
+        {
+            return;
+        }
+
+        _ = uiInvoker.BeginInvoke(action);
+    }
+
+    private void QueueUiAction(Func<Task> action)
+    {
+        if (uiInvoker.IsDisposed)
+        {
+            return;
+        }
+
+        _ = uiInvoker.BeginInvoke(async () => await action());
     }
 
     private void StartCouchMode()

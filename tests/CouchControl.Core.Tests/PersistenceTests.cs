@@ -47,7 +47,11 @@ public class PersistenceTests : IDisposable
             PreferredCouchWidth = 1920,
             PreferredCouchHeight = 1080,
             PreferredCouchRefreshRateHz = 120,
-            LaunchSteamAutomatically = false
+            LaunchSteamAutomatically = false,
+            AutomaticallyRecoverInterruptedDisplayOperations = true,
+            TvPreparationCommand = "cec-switch-tv-input",
+            TvPreparationDelayMs = 2500,
+            ApiListeningInterfaceId = "ethernet-guid"
         };
 
         // Act
@@ -68,6 +72,10 @@ public class PersistenceTests : IDisposable
         Assert.Equal(expectedConfig.PreferredCouchHeight, actualConfig.PreferredCouchHeight);
         Assert.Equal(expectedConfig.PreferredCouchRefreshRateHz, actualConfig.PreferredCouchRefreshRateHz);
         Assert.Equal(expectedConfig.LaunchSteamAutomatically, actualConfig.LaunchSteamAutomatically);
+        Assert.Equal(expectedConfig.AutomaticallyRecoverInterruptedDisplayOperations, actualConfig.AutomaticallyRecoverInterruptedDisplayOperations);
+        Assert.Equal(expectedConfig.TvPreparationCommand, actualConfig.TvPreparationCommand);
+        Assert.Equal(expectedConfig.TvPreparationDelayMs, actualConfig.TvPreparationDelayMs);
+        Assert.Equal(expectedConfig.ApiListeningInterfaceId, actualConfig.ApiListeningInterfaceId);
 
         string savedJson = await File.ReadAllTextAsync(filePath);
         Assert.Contains("\"SchemaVersion\": 1", savedJson);
@@ -133,6 +141,27 @@ public class PersistenceTests : IDisposable
         Assert.Equal(1, document.RootElement.GetProperty("SchemaVersion").GetInt32());
         Assert.Equal("snapshot-1", document.RootElement.GetProperty("SnapshotId").GetString());
         Assert.True(document.RootElement.TryGetProperty("SavedAtUtc", out _));
+    }
+
+    [Fact]
+    public async Task DisplayOperationJournalStore_SavesAndLoadsAtomically()
+    {
+        string filePath = Path.Combine(_tempFolder, "operation-journal.json");
+        var store = new JsonDisplayOperationJournalStore(filePath);
+        var journal = new DisplayOperationJournal(
+            Guid.NewGuid(),
+            DisplayOperationJournalTypes.ActivateCouch,
+            DisplayOperationJournalStates.InProgress,
+            "snapshot-rollback",
+            DateTimeOffset.UtcNow);
+
+        await store.SaveAsync(journal);
+        var loaded = await store.LoadAsync();
+
+        Assert.NotNull(loaded);
+        Assert.Equal(journal.OperationId, loaded!.OperationId);
+        Assert.Equal(journal.RollbackSnapshotId, loaded.RollbackSnapshotId);
+        Assert.Empty(Directory.GetFiles(_tempFolder, "*.tmp", SearchOption.AllDirectories));
     }
 
     [Fact]
@@ -208,5 +237,104 @@ public class PersistenceTests : IDisposable
 
         Assert.Equal(configuration.CouchDisplayIdentifier, loaded.CouchDisplayIdentifier);
         Assert.Null(loaded.CouchDisplayIdentity);
+    }
+
+    [Fact]
+    public async Task DisplaySnapshotStore_ClearAsync_RemovesSavedSnapshot()
+    {
+        string filePath = Path.Combine(_tempFolder, "snapshot-to-clear.json");
+        var store = new JsonDisplaySnapshotStore(filePath);
+        var snapshot = new DisplaySnapshot(
+            "snapshot-clear",
+            DateTimeOffset.UtcNow,
+            [
+                new DisplayDevice(
+                    new DisplayIdentifier("test_id"),
+                    "Test Monitor",
+                    true,
+                    true,
+                    new DisplayMode(1920, 1080, 60))
+            ],
+            [
+                new DisplayPathSnapshot(
+                    new DisplayIdentifier("test_id"),
+                    "00000000:000001C8",
+                    1,
+                    2,
+                    true,
+                    true,
+                    new DisplayPoint(0, 0),
+                    1920,
+                    1080,
+                    "32Bpp",
+                    new DisplayRefreshRate(60000, 1000),
+                    "Identity",
+                    "Preferred",
+                    "HDMI",
+                    new DisplaySourceModeSnapshot(1920, 1080, "32Bpp", new DisplayPoint(0, 0)),
+                    new DisplayTargetModeSnapshot(new DisplayRefreshRate(60000, 1000), 1920, 1080, "Progressive"))
+            ]);
+
+        await store.SaveAsync(snapshot);
+        Assert.True(File.Exists(filePath));
+
+        await store.ClearAsync();
+
+        Assert.False(File.Exists(filePath));
+        Assert.Null(await store.LoadLastDesktopSnapshotAsync());
+    }
+
+    [Fact]
+    public async Task DisplaySnapshotStore_SavePendingAndPromote_PreservesRollbackSnapshotUntilPromoted()
+    {
+        string filePath = Path.Combine(_tempFolder, "snapshot-state", "last-desktop.json");
+        var store = new JsonDisplaySnapshotStore(filePath);
+        var stableSnapshot = new DisplaySnapshot(
+            "snapshot-stable",
+            DateTimeOffset.UtcNow.AddMinutes(-10),
+            [
+                new DisplayDevice(
+                    new DisplayIdentifier("stable"),
+                    "Stable Monitor",
+                    true,
+                    true,
+                    new DisplayMode(1920, 1080, 60))
+            ],
+            [
+                new DisplayPathSnapshot(
+                    new DisplayIdentifier("stable"),
+                    "00000000:000001C8",
+                    1,
+                    2,
+                    true,
+                    true,
+                    new DisplayPoint(0, 0),
+                    1920,
+                    1080,
+                    "32Bpp",
+                    new DisplayRefreshRate(60000, 1000),
+                    "Identity",
+                    "Preferred",
+                    "HDMI",
+                    new DisplaySourceModeSnapshot(1920, 1080, "32Bpp", new DisplayPoint(0, 0)),
+                    new DisplayTargetModeSnapshot(new DisplayRefreshRate(60000, 1000), 1920, 1080, "Progressive"))
+            ]);
+        var pendingSnapshot = new DisplaySnapshot(
+            "snapshot-pending",
+            DateTimeOffset.UtcNow,
+            stableSnapshot.Displays,
+            stableSnapshot.Paths);
+
+        await store.SaveAsync(stableSnapshot);
+        await store.SavePendingAsync(pendingSnapshot);
+
+        var stableBeforePromotion = await store.LoadLastDesktopSnapshotAsync();
+        var pendingLoaded = await store.LoadByIdAsync(pendingSnapshot.SnapshotId);
+        await store.PromotePendingAsync(pendingSnapshot.SnapshotId);
+        var stableAfterPromotion = await store.LoadLastDesktopSnapshotAsync();
+
+        Assert.Equal(stableSnapshot.SnapshotId, stableBeforePromotion!.SnapshotId);
+        Assert.Equal(pendingSnapshot.SnapshotId, pendingLoaded!.SnapshotId);
+        Assert.Equal(pendingSnapshot.SnapshotId, stableAfterPromotion!.SnapshotId);
     }
 }

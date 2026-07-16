@@ -20,4 +20,8 @@ public interface IDisplayManager
         DisplaySnapshot snapshot,
         RestoreSnapshotOptions? options = null,
         CancellationToken cancellationToken = default);
+
+    Task<OperationResult> PrepareForCouchModeAsync(
+        AgentConfiguration configuration,
+        CancellationToken cancellationToken = default);
 }

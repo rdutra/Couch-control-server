@@ -6,6 +6,7 @@ using CouchControl.Core.Models;
 using CouchControl.Core.Orchestration;
 using CouchControl.Windows;
 using CouchControl.Windows.AgentApi;
+using CouchControl.Windows.Persistence;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
@@ -41,6 +42,73 @@ public sealed class AgentApiIntegrationTests
         host.Client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", "BADTOKEN");
         var invalidResponse = await host.Client.GetAsync("/api/v1/status");
         Assert.Equal(HttpStatusCode.Unauthorized, invalidResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task Pair_ReturnsPermanentDeviceToken_AndClosesSessionAfterOneUse()
+    {
+        await using var host = await AgentApiTestHost.StartAsync();
+        var session = await host.StartPairingSessionAsync();
+
+        var pairResponse = await host.Client.PostAsJsonAsync("/api/v1/pair", new PairRequest(session.PairingCode, "Rodrigo's iPhone"));
+        Assert.Equal(HttpStatusCode.OK, pairResponse.StatusCode);
+
+        var payload = await pairResponse.Content.ReadFromJsonAsync<PairResponse>();
+        Assert.NotNull(payload);
+        Assert.Equal("Living Room Gaming PC", payload.AgentName);
+        Assert.Equal("v1", payload.ApiVersion);
+        Assert.False(string.IsNullOrWhiteSpace(payload.Token));
+        Assert.NotEqual(host.Token, payload.Token);
+
+        var secondResponse = await host.Client.PostAsJsonAsync("/api/v1/pair", new PairRequest(session.PairingCode, "Another Device"));
+        Assert.Equal(HttpStatusCode.BadRequest, secondResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task Pair_RejectsExpiredCode()
+    {
+        await using var host = await AgentApiTestHost.StartAsync();
+        var session = await host.StartPairingSessionAsync();
+        host.AdvanceTime(TimeSpan.FromMinutes(6));
+
+        var response = await host.Client.PostAsJsonAsync("/api/v1/pair", new PairRequest(session.PairingCode, "Rodrigo's iPhone"));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Pair_IsRateLimitedAfterRepeatedFailures()
+    {
+        await using var host = await AgentApiTestHost.StartAsync();
+        _ = await host.StartPairingSessionAsync();
+
+        for (var attempt = 0; attempt < 4; attempt++)
+        {
+            var response = await host.Client.PostAsJsonAsync("/api/v1/pair", new PairRequest("000000", "Rodrigo's iPhone"));
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        }
+
+        var rateLimited = await host.Client.PostAsJsonAsync("/api/v1/pair", new PairRequest("111111", "Rodrigo's iPhone"));
+        Assert.Equal((HttpStatusCode)429, rateLimited.StatusCode);
+    }
+
+    [Fact]
+    public async Task Pair_InvalidCodesReturnGenericError()
+    {
+        await using var host = await AgentApiTestHost.StartAsync();
+        _ = await host.StartPairingSessionAsync();
+
+        var malformed = await host.Client.PostAsJsonAsync("/api/v1/pair", new PairRequest("abc", "Rodrigo's iPhone"));
+        var wrong = await host.Client.PostAsJsonAsync("/api/v1/pair", new PairRequest("999999", "Rodrigo's iPhone"));
+
+        Assert.Equal(HttpStatusCode.BadRequest, malformed.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, wrong.StatusCode);
+
+        var malformedPayload = await malformed.Content.ReadFromJsonAsync<ErrorResponse>();
+        var wrongPayload = await wrong.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(malformedPayload);
+        Assert.NotNull(wrongPayload);
+        Assert.Equal(malformedPayload.Message, wrongPayload.Message);
     }
 
     [Fact]
@@ -101,6 +169,20 @@ public sealed class AgentApiIntegrationTests
     }
 
     [Fact]
+    public async Task PairedDeviceToken_CanAccessProtectedEndpoints_ButNotAdministrativeEndpoints()
+    {
+        await using var host = await AgentApiTestHost.StartAsync();
+        var pairedToken = await host.PairDeviceAsync("Rodrigo's iPhone");
+
+        host.Client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", pairedToken);
+        var statusResponse = await host.Client.GetAsync("/api/v1/status");
+        Assert.Equal(HttpStatusCode.OK, statusResponse.StatusCode);
+
+        var devicesResponse = await host.Client.GetAsync("/api/v1/paired-devices");
+        Assert.Equal(HttpStatusCode.Unauthorized, devicesResponse.StatusCode);
+    }
+
+    [Fact]
     public async Task ActivateMode_Returns409_WhenAnotherOperationIsRunning()
     {
         var activationGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -127,13 +209,55 @@ public sealed class AgentApiIntegrationTests
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
+    [Fact]
+    public async Task RevokedDeviceToken_StopsWorkingImmediately()
+    {
+        await using var host = await AgentApiTestHost.StartAsync();
+        var pairedToken = await host.PairDeviceAsync("Rodrigo's iPhone");
+
+        host.Client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", host.Token);
+        var devices = await host.Client.GetFromJsonAsync<List<PairedDeviceResponse>>("/api/v1/paired-devices");
+        Assert.NotNull(devices);
+        var device = Assert.Single(devices);
+
+        var deleteResponse = await host.Client.DeleteAsync($"/api/v1/paired-devices/{device.DeviceId}");
+        Assert.Equal(HttpStatusCode.NoContent, deleteResponse.StatusCode);
+
+        host.Client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", pairedToken);
+        var statusResponse = await host.Client.GetAsync("/api/v1/status");
+        Assert.Equal(HttpStatusCode.Unauthorized, statusResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task MultiplePairedDevices_AreTrackedIndependently()
+    {
+        await using var host = await AgentApiTestHost.StartAsync();
+        var iphoneToken = await host.PairDeviceAsync("Rodrigo's iPhone");
+        var ipadToken = await host.PairDeviceAsync("Rodrigo's iPad");
+
+        host.Client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", host.Token);
+        var devices = await host.Client.GetFromJsonAsync<List<PairedDeviceResponse>>("/api/v1/paired-devices");
+        Assert.NotNull(devices);
+        Assert.Equal(2, devices.Count);
+        Assert.Contains(devices, static device => device.DeviceName == "Rodrigo's iPhone");
+        Assert.Contains(devices, static device => device.DeviceName == "Rodrigo's iPad");
+
+        host.Client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", iphoneToken);
+        Assert.Equal(HttpStatusCode.OK, (await host.Client.GetAsync("/api/v1/status")).StatusCode);
+
+        host.Client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", ipadToken);
+        Assert.Equal(HttpStatusCode.OK, (await host.Client.GetAsync("/api/v1/status")).StatusCode);
+    }
+
     private sealed class AgentApiTestHost : IAsyncDisposable
     {
         private readonly WebApplication app;
+        private readonly MutableTimeProvider timeProvider;
 
-        private AgentApiTestHost(WebApplication app, HttpClient client, string token)
+        private AgentApiTestHost(WebApplication app, HttpClient client, string token, MutableTimeProvider timeProvider)
         {
             this.app = app;
+            this.timeProvider = timeProvider;
             Client = client;
             Token = token;
         }
@@ -155,6 +279,7 @@ public sealed class AgentApiIntegrationTests
             });
             builder.WebHost.UseTestServer();
             builder.Logging.ClearProviders();
+            var timeProvider = new MutableTimeProvider(DateTimeOffset.Parse("2026-07-15T12:00:00Z"));
 
             var configStore = new InMemoryAgentConfigurationStore();
             await configStore.SaveAsync(new AgentConfiguration
@@ -176,6 +301,7 @@ public sealed class AgentApiIntegrationTests
             builder.Services.AddSingleton(new CouchControlPaths(root));
             builder.Services.AddSingleton<IAgentConfigurationStore>(configStore);
             builder.Services.AddSingleton<IDisplaySnapshotStore>(displaySnapshotStore);
+            builder.Services.AddSingleton<IDisplayOperationJournalStore, JsonDisplayOperationJournalStore>();
             builder.Services.AddSingleton<IDisplayManager>(new FakeDisplayManager(activationGate));
             builder.Services.AddSingleton<ISteamLauncher>(new FakeSteamLauncher());
             builder.Services.AddSingleton<IDisplayMatchingService, DisplayMatchingService>();
@@ -183,6 +309,7 @@ public sealed class AgentApiIntegrationTests
             builder.Services.AddSingleton<IProfileOrchestrator>(static services => services.GetRequiredService<ProfileOrchestrator>());
             builder.Services.AddCouchControlAgentApi();
             builder.Services.AddSingleton<IProtectedDataService, PassthroughProtectedDataService>();
+            builder.Services.AddSingleton<TimeProvider>(timeProvider);
 
             var app = builder.Build();
             app.MapCouchControlAgentApi();
@@ -190,7 +317,22 @@ public sealed class AgentApiIntegrationTests
             await app.StartAsync();
 
             var token = await app.Services.GetRequiredService<IApiTokenStore>().GetTokenAsync();
-            return new AgentApiTestHost(app, app.GetTestClient(), token);
+            return new AgentApiTestHost(app, app.GetTestClient(), token, timeProvider);
+        }
+
+        public void AdvanceTime(TimeSpan by) => timeProvider.Advance(by);
+
+        public async Task<PairingSession> StartPairingSessionAsync() =>
+            await app.Services.GetRequiredService<IPairingService>().StartAsync();
+
+        public async Task<string> PairDeviceAsync(string deviceName)
+        {
+            var session = await StartPairingSessionAsync();
+            var response = await Client.PostAsJsonAsync("/api/v1/pair", new PairRequest(session.PairingCode, deviceName));
+            response.EnsureSuccessStatusCode();
+            var payload = await response.Content.ReadFromJsonAsync<PairResponse>();
+            Assert.NotNull(payload);
+            return payload.Token;
         }
 
         public async Task<OperationResponse> WaitForOperationAsync(Guid operationId)
@@ -236,6 +378,11 @@ public sealed class AgentApiIntegrationTests
         public Task<DisplaySnapshot> CaptureSnapshotAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(CreateSnapshot(UltrawidePath, "GS34WQC", "00000000:000135B1", 0, 33024));
 
+        public Task<OperationResult> PrepareForCouchModeAsync(
+            AgentConfiguration configuration,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(OperationResult.Success("Prepared TV."));
+
         public async Task<OperationResult> ActivateOnlyAsync(DisplayIdentifier display, DisplayMode? preferredMode, bool dryRun = false, CancellationToken cancellationToken = default)
         {
             if (activationGate is not null)
@@ -265,6 +412,20 @@ public sealed class AgentApiIntegrationTests
         public byte[] Protect(byte[] plaintext) => plaintext;
 
         public byte[] Unprotect(byte[] ciphertext) => ciphertext;
+    }
+
+    private sealed class MutableTimeProvider : TimeProvider
+    {
+        private DateTimeOffset now;
+
+        public MutableTimeProvider(DateTimeOffset now)
+        {
+            this.now = now;
+        }
+
+        public override DateTimeOffset GetUtcNow() => now;
+
+        public void Advance(TimeSpan by) => now = now.Add(by);
     }
 
     private static DisplaySnapshot CreateSnapshot(
