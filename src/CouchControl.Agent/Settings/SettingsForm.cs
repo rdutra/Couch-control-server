@@ -42,10 +42,12 @@ public sealed class SettingsForm : Form
     private readonly CheckBox startWithWindowsCheckBox;
     private readonly ListView pairedDevicesListView;
     private readonly Button revokeDeviceButton;
+    private readonly Button checkFirewallRuleButton;
     private readonly Button recreateFirewallRuleButton;
     private readonly Button removeFirewallRuleButton;
     private readonly Button saveSnapshotButton;
     private readonly Button clearSnapshotButton;
+    private readonly Button showWakeSignInInstructionsButton;
     private readonly Button saveButton;
     private readonly Button reloadButton;
     private readonly ILocalNetworkInterfaceProvider networkInterfaceProvider;
@@ -160,6 +162,13 @@ public sealed class SettingsForm : Form
             AutoSize = true,
             Margin = new Padding(0, 8, 0, 0)
         };
+        checkFirewallRuleButton = new Button
+        {
+            Text = "Check Firewall Status",
+            AutoSize = true
+        };
+        checkFirewallRuleButton.Click += async (_, _) => await CheckFirewallRuleAsync();
+
         recreateFirewallRuleButton = new Button
         {
             Text = "Create or Recreate Firewall Rule",
@@ -174,10 +183,11 @@ public sealed class SettingsForm : Form
         };
         removeFirewallRuleButton.Click += async (_, _) => await RemoveFirewallRuleAsync();
 
+        firewallButtonPanel.Controls.Add(checkFirewallRuleButton);
         firewallButtonPanel.Controls.Add(recreateFirewallRuleButton);
         firewallButtonPanel.Controls.Add(removeFirewallRuleButton);
         networkLayout.Controls.Add(firewallButtonPanel, 1, 5);
-        AddHelpText(networkLayout, 6, "Restart the agent after changing the API port or listening interface. Firewall changes prompt for elevation only because Windows Defender Firewall is system-wide.");
+        AddHelpText(networkLayout, 6, "Restart the agent after changing the API port or listening interface. Firewall status checks and changes use Windows PowerShell only when you click a firewall button.");
         tabs.TabPages.Add(CreateTabPage("Network", networkLayout));
 
         var systemLayout = CreateTabLayout();
@@ -198,6 +208,40 @@ public sealed class SettingsForm : Form
         };
         systemLayout.Controls.Add(startWithWindowsCheckBox, 1, 1);
 
+        var wakeSignInLabel = new Label
+        {
+            Text = "Wake sign-in",
+            AutoSize = true,
+            Anchor = AnchorStyles.Left,
+            Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold),
+            Margin = new Padding(0, 20, 0, 4)
+        };
+        systemLayout.Controls.Add(wakeSignInLabel, 0, 2);
+
+        var wakeSignInPanel = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            Margin = new Padding(0, 16, 0, 0)
+        };
+        var wakeSignInHelpText = new Label
+        {
+            Text = "Wake-on-LAN can power on the PC, but Windows may still require your PIN after sleep. For couch use, change this in Windows Settings yourself instead of having CouchControl launch system settings.",
+            AutoSize = true,
+            MaximumSize = new Size(560, 0)
+        };
+        showWakeSignInInstructionsButton = new Button
+        {
+            Text = "Show Windows Sign-in Instructions",
+            AutoSize = true,
+            Margin = new Padding(0, 8, 0, 0)
+        };
+        showWakeSignInInstructionsButton.Click += (_, _) => ShowWakeSignInInstructions();
+        wakeSignInPanel.Controls.Add(wakeSignInHelpText);
+        wakeSignInPanel.Controls.Add(showWakeSignInInstructionsButton);
+        systemLayout.Controls.Add(wakeSignInPanel, 1, 2);
+
         var pairedDevicesLabel = new Label
         {
             Text = "Paired devices",
@@ -206,7 +250,7 @@ public sealed class SettingsForm : Form
             Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold),
             Margin = new Padding(0, 20, 0, 4)
         };
-        systemLayout.Controls.Add(pairedDevicesLabel, 0, 2);
+        systemLayout.Controls.Add(pairedDevicesLabel, 0, 3);
 
         pairedDevicesListView = new ListView
         {
@@ -219,7 +263,7 @@ public sealed class SettingsForm : Form
         pairedDevicesListView.Columns.Add("Device", 200);
         pairedDevicesListView.Columns.Add("Paired", 160);
         pairedDevicesListView.Columns.Add("Last seen", 160);
-        systemLayout.Controls.Add(pairedDevicesListView, 1, 2);
+        systemLayout.Controls.Add(pairedDevicesListView, 1, 3);
 
         revokeDeviceButton = new Button
         {
@@ -229,7 +273,7 @@ public sealed class SettingsForm : Form
         };
         revokeDeviceButton.Click += async (_, _) => await RevokeSelectedDeviceAsync();
         pairedDevicesListView.SelectedIndexChanged += (_, _) => revokeDeviceButton.Enabled = pairedDevicesListView.SelectedItems.Count > 0 && !isBusy;
-        systemLayout.Controls.Add(revokeDeviceButton, 1, 3);
+        systemLayout.Controls.Add(revokeDeviceButton, 1, 4);
         tabs.TabPages.Add(CreateTabPage("System", systemLayout));
 
         var bottomButtonPanel = new FlowLayoutPanel
@@ -290,7 +334,7 @@ public sealed class SettingsForm : Form
             await LoadSnapshotStatusAsync();
             corsOriginsTextBox.Text = string.Join(", ", configuration.CorsAllowedOrigins);
             apiTokenTextBox.Text = await apiTokenStore.GetTokenAsync();
-            firewallRuleStatusValue.Text = firewallRuleManager.GetStatus(configuration.ApiPort).StatusText;
+            firewallRuleStatusValue.Text = "Not checked";
             launchSteamCheckBox.Checked = configuration.LaunchSteamAutomatically;
             automaticRecoveryCheckBox.Checked = configuration.AutomaticallyRecoverInterruptedDisplayOperations;
             startWithWindowsCheckBox.Checked = startupRegistration.IsEnabled(ApplicationName);
@@ -361,10 +405,12 @@ public sealed class SettingsForm : Form
         corsOriginsTextBox.Enabled = false;
         pairedDevicesListView.Enabled = false;
         revokeDeviceButton.Enabled = false;
+        checkFirewallRuleButton.Enabled = false;
         recreateFirewallRuleButton.Enabled = false;
         removeFirewallRuleButton.Enabled = false;
         saveSnapshotButton.Enabled = false;
         clearSnapshotButton.Enabled = false;
+        showWakeSignInInstructionsButton.Enabled = false;
 
         try
         {
@@ -394,11 +440,26 @@ public sealed class SettingsForm : Form
             corsOriginsTextBox.Enabled = true;
             pairedDevicesListView.Enabled = true;
             revokeDeviceButton.Enabled = pairedDevicesListView.SelectedItems.Count > 0;
+            checkFirewallRuleButton.Enabled = true;
             recreateFirewallRuleButton.Enabled = true;
             removeFirewallRuleButton.Enabled = true;
             saveSnapshotButton.Enabled = true;
             clearSnapshotButton.Enabled = true;
+            showWakeSignInInstructionsButton.Enabled = true;
         }
+    }
+
+    private static void ShowWakeSignInInstructions()
+    {
+        MessageBox.Show(
+            "To avoid needing a keyboard after Wake-on-LAN:\n\n" +
+            "1. Open Windows Settings.\n" +
+            "2. Go to Accounts > Sign-in options.\n" +
+            "3. Under Additional settings, set \"If you've been away, when should Windows require you to sign in again?\" to \"Never\".\n\n" +
+            "If you prefer to keep sign-in required, use Windows Hello face or fingerprint unlock instead.",
+            "Wake sign-in instructions",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Information);
     }
 
     private async Task RunSnapshotActionAsync(Button button, Func<Task> action)
@@ -826,6 +887,20 @@ public sealed class SettingsForm : Form
         return items;
     }
 
+    private async Task CheckFirewallRuleAsync()
+    {
+        if (isBusy)
+        {
+            return;
+        }
+
+        await RunBusyAsync(() =>
+        {
+            firewallRuleStatusValue.Text = firewallRuleManager.GetStatus(ParseApiPort()).StatusText;
+            return Task.CompletedTask;
+        });
+    }
+
     private async Task RecreateFirewallRuleAsync()
     {
         if (isBusy)
@@ -845,7 +920,7 @@ public sealed class SettingsForm : Form
         await RunBusyAsync(async () =>
         {
             var result = firewallRuleManager.RecreateRule(ParseApiPort());
-            firewallRuleStatusValue.Text = firewallRuleManager.GetStatus(ParseApiPort()).StatusText;
+            firewallRuleStatusValue.Text = result.Succeeded ? "Present (private TCP rule)" : "Unknown";
             MessageBox.Show(result.Message, "Firewall Rule", MessageBoxButtons.OK, result.Succeeded ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
             await Task.CompletedTask;
         });
@@ -870,7 +945,7 @@ public sealed class SettingsForm : Form
         await RunBusyAsync(async () =>
         {
             var result = firewallRuleManager.RemoveRule(ParseApiPort());
-            firewallRuleStatusValue.Text = firewallRuleManager.GetStatus(ParseApiPort()).StatusText;
+            firewallRuleStatusValue.Text = result.Succeeded ? "Missing" : "Unknown";
             MessageBox.Show(result.Message, "Firewall Rule", MessageBoxButtons.OK, result.Succeeded ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
             await Task.CompletedTask;
         });

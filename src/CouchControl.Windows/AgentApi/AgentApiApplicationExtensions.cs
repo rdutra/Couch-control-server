@@ -38,7 +38,7 @@ public static class AgentApiApplicationExtensions
 
     public static WebApplication MapCouchControlAgentApi(this WebApplication app)
     {
-        app.MapGet("/api/v1/health", () => Results.Ok(new HealthResponse(true)));
+        app.MapGet("/api/v1/health", () => Results.Ok(new HealthResponse(true, GetVersion())));
 
         app.UseAgentApiCors();
         app.UseAgentApiRequestLogging();
@@ -388,7 +388,7 @@ internal static class AgentApiMiddlewareExtensions
         });
 }
 
-public sealed record HealthResponse(bool Healthy);
+public sealed record HealthResponse(bool Healthy, string Version);
 
 public sealed record ErrorResponse(string Message);
 

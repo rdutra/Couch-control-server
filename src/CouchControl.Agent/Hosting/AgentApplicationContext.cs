@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Drawing;
+using System.IO;
+using System.Reflection;
 using CouchControl.Agent.Logging;
 using CouchControl.Agent.Settings;
 using CouchControl.Agent.Status;
@@ -17,6 +19,7 @@ namespace CouchControl.Agent.Hosting;
 public sealed class AgentApplicationContext : ApplicationContext
 {
     private const string ApplicationName = "CouchControl.Agent";
+    private const string TrayIconResourceName = "CouchControl.Agent.Assets.couchcontrol.ico";
 
     private readonly NotifyIcon notifyIcon;
     private readonly ToolStripMenuItem activateCouchModeItem;
@@ -137,7 +140,7 @@ public sealed class AgentApplicationContext : ApplicationContext
         notifyIcon = new NotifyIcon
         {
             Text = "Couch Control",
-            Icon = SystemIcons.Application,
+            Icon = LoadTrayIcon(),
             Visible = true,
             ContextMenuStrip = contextMenu
         };
@@ -169,6 +172,18 @@ public sealed class AgentApplicationContext : ApplicationContext
 
     public void StartStartupRecoveryCheck() =>
         uiInvoker.BeginInvoke(async () => await RunStartupRecoveryCheckAsync());
+
+    private static Icon LoadTrayIcon()
+    {
+        var assembly = typeof(AgentApplicationContext).Assembly;
+        using Stream stream = assembly.GetManifestResourceStream(TrayIconResourceName)
+            ?? throw new InvalidOperationException($"Missing tray icon resource '{TrayIconResourceName}'.");
+        using var memory = new MemoryStream();
+        stream.CopyTo(memory);
+        memory.Position = 0;
+        using var icon = new Icon(memory);
+        return (Icon)icon.Clone();
+    }
 
     private void RefreshMenuState()
     {

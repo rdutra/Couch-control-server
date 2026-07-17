@@ -116,7 +116,7 @@ public sealed class ProfileOrchestratorTests
         var orchestrator = CreateOrchestrator(
             configurationStore,
             displayManager,
-            new FakeSnapshotStore { LastSnapshot = CreateSnapshot("manual-desktop", targetDisplay) });
+            new FakeSnapshotStore());
 
         var result = await orchestrator.ActivateCouchModeAsync();
 
@@ -158,7 +158,7 @@ public sealed class ProfileOrchestratorTests
         var orchestrator = CreateOrchestrator(
             configurationStore,
             displayManager,
-            new FakeSnapshotStore { LastSnapshot = CreateSnapshot("manual-desktop", targetDisplay) });
+            new FakeSnapshotStore());
 
         var result = await orchestrator.ActivateCouchModeAsync();
 
@@ -217,7 +217,7 @@ public sealed class ProfileOrchestratorTests
         var result = await orchestrator.ActivateCouchModeAsync();
 
         Assert.True(result.Succeeded);
-        Assert.Equal(1, displayManager.PrepareForCouchModeCallCount);
+        Assert.Equal(2, displayManager.PrepareForCouchModeCallCount);
         Assert.Equal(2, displayManager.GetDisplaysCallCount);
     }
 
@@ -240,7 +240,7 @@ public sealed class ProfileOrchestratorTests
         var result = await orchestrator.ActivateCouchModeAsync();
 
         Assert.False(result.Succeeded);
-        Assert.Equal("couch_display_not_connected", result.DisplayResult.ErrorCode);
+        Assert.Equal("tv_preparation_command_failed", result.DisplayResult.ErrorCode);
         Assert.Equal(1, displayManager.PrepareForCouchModeCallCount);
     }
 
@@ -264,7 +264,10 @@ public sealed class ProfileOrchestratorTests
             TvPreparationCommand = "cec-switch-tv-input",
             LaunchSteamAutomatically = false
         });
-        var orchestrator = CreateOrchestrator(configurationStore, displayManager, new FakeSnapshotStore());
+        var orchestrator = CreateOrchestrator(
+            configurationStore,
+            displayManager,
+            new FakeSnapshotStore { LastSnapshot = CreateSnapshot("manual-desktop", targetDisplay) });
 
         var result = await orchestrator.ActivateCouchModeAsync();
 
@@ -293,7 +296,10 @@ public sealed class ProfileOrchestratorTests
             TvPreparationCommand = "cec-switch-tv-input",
             LaunchSteamAutomatically = false
         });
-        var orchestrator = CreateOrchestrator(configurationStore, displayManager, new FakeSnapshotStore());
+        var orchestrator = CreateOrchestrator(
+            configurationStore,
+            displayManager,
+            new FakeSnapshotStore { LastSnapshot = CreateSnapshot("manual-desktop", targetDisplay) });
 
         var result = await orchestrator.ActivateCouchModeAsync();
 
@@ -315,7 +321,10 @@ public sealed class ProfileOrchestratorTests
             RestoreSnapshotResult = OperationResult.Success("restored")
         };
         var configurationStore = new FakeConfigurationStore(CreateConfiguration(targetDisplay));
-        var orchestrator = CreateOrchestrator(configurationStore, displayManager, new FakeSnapshotStore());
+        var orchestrator = CreateOrchestrator(
+            configurationStore,
+            displayManager,
+            new FakeSnapshotStore { LastSnapshot = CreateSnapshot("manual-desktop", targetDisplay) });
 
         var result = await orchestrator.ActivateCouchModeAsync();
 
@@ -369,7 +378,10 @@ public sealed class ProfileOrchestratorTests
             RestoreSnapshotResult = OperationResult.Success("restored")
         };
         var configurationStore = new FakeConfigurationStore(CreateConfiguration(targetDisplay));
-        var orchestrator = CreateOrchestrator(configurationStore, displayManager, new FakeSnapshotStore());
+        var orchestrator = CreateOrchestrator(
+            configurationStore,
+            displayManager,
+            new FakeSnapshotStore { LastSnapshot = CreateSnapshot("manual-desktop", targetDisplay) });
 
         var result = await orchestrator.ActivateCouchModeAsync();
 

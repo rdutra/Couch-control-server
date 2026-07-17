@@ -405,5 +405,4 @@ public class PersistenceTests : IDisposable
                     new DisplaySourceModeSnapshot(1920, 1080, "32Bpp", new DisplayPoint(0, 0)),
                     new DisplayTargetModeSnapshot(new DisplayRefreshRate(60000, 1000), 1920, 1080, "Progressive"))
             ]);
-    }
 }

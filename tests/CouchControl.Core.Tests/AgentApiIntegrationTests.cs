@@ -30,6 +30,7 @@ public sealed class AgentApiIntegrationTests
         var payload = await response.Content.ReadFromJsonAsync<HealthResponse>();
         Assert.NotNull(payload);
         Assert.True(payload.Healthy);
+        Assert.False(string.IsNullOrWhiteSpace(payload.Version));
     }
 
     [Fact]
@@ -124,6 +125,7 @@ public sealed class AgentApiIntegrationTests
         var status = await host.Client.GetFromJsonAsync<StatusResponse>("/api/v1/status");
         Assert.NotNull(status);
         Assert.Equal("Living Room Gaming PC", status.AgentName);
+        Assert.False(string.IsNullOrWhiteSpace(status.Version));
         Assert.Equal("desktop", status.Mode);
         Assert.Equal("idle", status.Operation);
         Assert.True(status.TvConnected);
@@ -143,7 +145,7 @@ public sealed class AgentApiIntegrationTests
     [Fact]
     public async Task ActivateCouchMode_ReturnsAccepted_AndOperationCanBeFetched()
     {
-        await using var host = await AgentApiTestHost.StartAsync();
+        await using var host = await AgentApiTestHost.StartAsync(seedDesktopSnapshot: true);
         host.Client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", host.Token);
 
         var startResponse = await host.Client.PostAsync("/api/v1/modes/couch", content: null);
@@ -193,7 +195,7 @@ public sealed class AgentApiIntegrationTests
     public async Task ActivateMode_Returns409_WhenAnotherOperationIsRunning()
     {
         var activationGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        await using var host = await AgentApiTestHost.StartAsync(activationGate: activationGate);
+        await using var host = await AgentApiTestHost.StartAsync(seedDesktopSnapshot: true, activationGate: activationGate);
         host.Client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", host.Token);
 
         var firstResponse = await host.Client.PostAsync("/api/v1/modes/couch", content: null);

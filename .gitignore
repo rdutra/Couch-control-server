@@ -1,9 +1,33 @@
 bin/
 obj/
 artifacts/
+TestResults/
+publish/
+
+# Package and installer outputs
+*.exe
+*.msi
+*.msix
+*.appx
+*.appxbundle
+*.7z
+*.nupkg
+*.snupkg
+*.zip
+
+# Signing material and generated hashes
+*.pfx
+*.p12
+*.cer
+*.crt
+*.pem
+*.sha256
 
 .DS_Store
+Thumbs.db
 
 *.user
 *.suo
 *.swp
+.vs/
+.vscode/

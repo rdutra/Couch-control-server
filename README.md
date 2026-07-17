@@ -130,23 +130,37 @@ After the initial configuration is in place, start `CouchControl.Agent.exe` in t
 - `View Logs`
 - `Start with Windows`
 
-### 6. Publish Windows executables
+### 6. Package the Windows installer
 
-Both publish scripts now generate separate CLI and tray-agent outputs:
-
-- `artifacts/publish/cli-win-x64-fdd`
-- `artifacts/publish/cli-win-x64-sc`
-- `artifacts/publish/agent-win-x64-fdd`
-- `artifacts/publish/agent-win-x64-sc`
-
-Use either script from the repository root:
+Create the Windows x64 MVP package from the repository root:
 
 ```powershell
-./publish-windows.ps1
+.\scripts\publish-win-x64.ps1
 ```
 
-```bash
-./publish-windows.sh
+The package output is written to:
+
+```text
+artifacts\win-x64\CouchControl\
+artifacts\win-x64\CouchControl-win-x64.zip
+```
+
+To build the optional Windows setup wizard on a machine with Inno Setup installed:
+
+```powershell
+.\packaging\windows\build-setup-exe.ps1
+```
+
+That produces:
+
+```text
+artifacts\win-x64\CouchControlSetup-win-x64.exe
+```
+
+On the target Windows PC, run the setup wizard, or extract the zip and run:
+
+```powershell
+.\install.ps1
 ```
 
 ## CLI Usage
