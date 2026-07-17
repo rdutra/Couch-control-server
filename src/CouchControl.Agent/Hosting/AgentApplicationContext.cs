@@ -59,6 +59,7 @@ public sealed class AgentApplicationContext : ApplicationContext
         IApiTokenStore apiTokenStore,
         IPairingService pairingService,
         IAgentNetworkDiagnosticsService diagnosticsService,
+        IAudioDeviceService audioDeviceService,
         ILocalNetworkInterfaceProvider networkInterfaceProvider,
         IWindowsFirewallRuleManager firewallRuleManager,
         CouchControlPaths paths,
@@ -102,6 +103,7 @@ public sealed class AgentApplicationContext : ApplicationContext
         diagnosticsForm = new NetworkDiagnosticsForm(diagnosticsService);
         settingsForm = new SettingsForm(
             configurationStore,
+            audioDeviceService,
             startupRegistration,
             startupCommandLine,
             apiTokenStore,

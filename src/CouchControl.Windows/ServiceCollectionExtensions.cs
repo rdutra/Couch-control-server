@@ -13,6 +13,8 @@ public static class ServiceCollectionExtensions
     {
         services.AddSingleton(static _ => CouchControlPaths.CreateDefault());
         services.AddSingleton<IDisplayManager, WindowsDisplayManager>();
+        services.AddSingleton<IAudioDeviceService, AudioDeviceService>();
+        services.AddSingleton<IModeAutomationService, ModeAutomationService>();
         services.AddSingleton<ISteamLauncher, WindowsSteamLauncher>();
         services.AddSingleton<IDisplaySnapshotStore, JsonDisplaySnapshotStore>();
         services.AddSingleton<IDisplayOperationJournalStore, JsonDisplayOperationJournalStore>();

@@ -51,6 +51,12 @@ public class PersistenceTests : IDisposable
             AutomaticallyRecoverInterruptedDisplayOperations = true,
             TvPreparationCommand = "cec-switch-tv-input",
             TvPreparationDelayMs = 2500,
+            CouchAudioDeviceId = "tv-audio-id",
+            CouchAudioDeviceName = "LG TV",
+            DesktopAudioDeviceId = "desktop-audio-id",
+            DesktopAudioDeviceName = "Creative Speakers",
+            CouchAudioCommand = "switch-audio-tv",
+            DesktopAudioCommand = "switch-audio-desktop",
             ApiListeningInterfaceId = "ethernet-guid"
         };
 
@@ -75,6 +81,12 @@ public class PersistenceTests : IDisposable
         Assert.Equal(expectedConfig.AutomaticallyRecoverInterruptedDisplayOperations, actualConfig.AutomaticallyRecoverInterruptedDisplayOperations);
         Assert.Equal(expectedConfig.TvPreparationCommand, actualConfig.TvPreparationCommand);
         Assert.Equal(expectedConfig.TvPreparationDelayMs, actualConfig.TvPreparationDelayMs);
+        Assert.Equal(expectedConfig.CouchAudioDeviceId, actualConfig.CouchAudioDeviceId);
+        Assert.Equal(expectedConfig.CouchAudioDeviceName, actualConfig.CouchAudioDeviceName);
+        Assert.Equal(expectedConfig.DesktopAudioDeviceId, actualConfig.DesktopAudioDeviceId);
+        Assert.Equal(expectedConfig.DesktopAudioDeviceName, actualConfig.DesktopAudioDeviceName);
+        Assert.Equal(expectedConfig.CouchAudioCommand, actualConfig.CouchAudioCommand);
+        Assert.Equal(expectedConfig.DesktopAudioCommand, actualConfig.DesktopAudioCommand);
         Assert.Equal(expectedConfig.ApiListeningInterfaceId, actualConfig.ApiListeningInterfaceId);
 
         string savedJson = await File.ReadAllTextAsync(filePath);
@@ -277,6 +289,8 @@ public class PersistenceTests : IDisposable
 
         await store.SaveAsync(snapshot);
         Assert.True(File.Exists(filePath));
+        Assert.Empty(Directory.GetFiles(_tempFolder, "*.json", SearchOption.TopDirectoryOnly)
+            .Where(path => !string.Equals(path, filePath, StringComparison.OrdinalIgnoreCase)));
 
         await store.ClearAsync();
 
@@ -332,9 +346,64 @@ public class PersistenceTests : IDisposable
         var pendingLoaded = await store.LoadByIdAsync(pendingSnapshot.SnapshotId);
         await store.PromotePendingAsync(pendingSnapshot.SnapshotId);
         var stableAfterPromotion = await store.LoadLastDesktopSnapshotAsync();
+        var remainingSnapshotFiles = Directory.GetFiles(Path.GetDirectoryName(filePath)!, "*.json", SearchOption.TopDirectoryOnly)
+            .Where(path => !string.Equals(path, filePath, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
 
         Assert.Equal(stableSnapshot.SnapshotId, stableBeforePromotion!.SnapshotId);
         Assert.Equal(pendingSnapshot.SnapshotId, pendingLoaded!.SnapshotId);
         Assert.Equal(pendingSnapshot.SnapshotId, stableAfterPromotion!.SnapshotId);
+        Assert.Empty(remainingSnapshotFiles);
+    }
+
+    [Fact]
+    public async Task DisplaySnapshotStore_SavePending_PrunesOlderPendingSnapshots()
+    {
+        string filePath = Path.Combine(_tempFolder, "snapshot-prune", "last-desktop.json");
+        var store = new JsonDisplaySnapshotStore(filePath);
+        var stableSnapshot = CreateSnapshot("snapshot-stable", "stable");
+        var firstPending = CreateSnapshot("snapshot-pending-1", "pending-1");
+        var secondPending = CreateSnapshot("snapshot-pending-2", "pending-2");
+
+        await store.SaveAsync(stableSnapshot);
+        await store.SavePendingAsync(firstPending);
+        await store.SavePendingAsync(secondPending);
+
+        Assert.Null(await store.LoadByIdAsync(firstPending.SnapshotId));
+        Assert.NotNull(await store.LoadByIdAsync(secondPending.SnapshotId));
+        Assert.Equal(stableSnapshot.SnapshotId, (await store.LoadLastDesktopSnapshotAsync())!.SnapshotId);
+    }
+
+    private static DisplaySnapshot CreateSnapshot(string snapshotId, string displayId) =>
+        new(
+            snapshotId,
+            DateTimeOffset.UtcNow,
+            [
+                new DisplayDevice(
+                    new DisplayIdentifier(displayId),
+                    "Test Monitor",
+                    true,
+                    true,
+                    new DisplayMode(1920, 1080, 60))
+            ],
+            [
+                new DisplayPathSnapshot(
+                    new DisplayIdentifier(displayId),
+                    "00000000:000001C8",
+                    1,
+                    2,
+                    true,
+                    true,
+                    new DisplayPoint(0, 0),
+                    1920,
+                    1080,
+                    "32Bpp",
+                    new DisplayRefreshRate(60000, 1000),
+                    "Identity",
+                    "Preferred",
+                    "HDMI",
+                    new DisplaySourceModeSnapshot(1920, 1080, "32Bpp", new DisplayPoint(0, 0)),
+                    new DisplayTargetModeSnapshot(new DisplayRefreshRate(60000, 1000), 1920, 1080, "Progressive"))
+            ]);
     }
 }

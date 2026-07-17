@@ -82,6 +82,23 @@ public sealed class WindowsSteamLauncherTests
         Assert.Equal("steam_launch_failed", result.ErrorCode);
     }
 
+    [Fact]
+    public async Task ExitBigPictureAsync_SendsAltEnterToSteamWindow()
+    {
+        var processAdapter = new FakeProcessAdapter
+        {
+            IsRunningResult = true,
+            MainWindowHandle = new IntPtr(1)
+        };
+        var launcher = CreateLauncher(processAdapter: processAdapter);
+
+        var result = await launcher.ExitBigPictureAsync();
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(new IntPtr(1), processAdapter.ForegroundWindowHandle);
+        Assert.True(processAdapter.AltEnterSent);
+    }
+
     private static WindowsSteamLauncher CreateLauncher(
         IFileSystemAdapter? fileSystem = null,
         IProcessAdapter? processAdapter = null,
@@ -108,9 +125,25 @@ public sealed class WindowsSteamLauncherTests
 
         public Exception? StartException { get; init; }
 
+        public IntPtr MainWindowHandle { get; init; }
+
         public ProcessStartInfo? StartCall { get; private set; }
 
+        public IntPtr ForegroundWindowHandle { get; private set; }
+
+        public bool AltEnterSent { get; private set; }
+
         public bool IsProcessRunning(string processName) => IsRunningResult;
+
+        public IntPtr GetMainWindowHandle(string processName) => MainWindowHandle;
+
+        public bool SetForegroundWindow(IntPtr windowHandle)
+        {
+            ForegroundWindowHandle = windowHandle;
+            return true;
+        }
+
+        public void SendAltEnter() => AltEnterSent = true;
 
         public void Start(ProcessStartInfo startInfo)
         {

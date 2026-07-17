@@ -109,6 +109,48 @@ public sealed class WindowsSteamLauncher : ISteamLauncher
         }
     }
 
+    public async Task<OperationResult> ExitBigPictureAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!processAdapter.IsProcessRunning("steam"))
+        {
+            return OperationResult.Success(
+                "Steam is not running.",
+                outcome: "Success",
+                details:
+                [
+                    "Steam is not running"
+                ]);
+        }
+
+        var windowHandle = processAdapter.GetMainWindowHandle("steam");
+        if (windowHandle == IntPtr.Zero)
+        {
+            return OperationResult.PartialSuccess(
+                "Steam is running but no main window was found to exit Big Picture mode.",
+                outcome: "Partial success",
+                details:
+                [
+                    "Steam is running",
+                    "Steam main window not found"
+                ]);
+        }
+
+        processAdapter.SetForegroundWindow(windowHandle);
+        await Task.Delay(250, cancellationToken);
+        processAdapter.SendAltEnter();
+
+        return OperationResult.Success(
+            "Steam fullscreen mode toggle requested.",
+            outcome: "Success",
+            details:
+            [
+                "Steam is running",
+                "Requested Big Picture exit via Alt+Enter"
+            ]);
+    }
+
     internal bool TryResolveSteamPath(AgentConfiguration configuration, out string steamPath)
     {
         foreach (var candidate in EnumerateCandidates(configuration))
@@ -188,6 +230,12 @@ internal interface IProcessAdapter
 {
     bool IsProcessRunning(string processName);
 
+    IntPtr GetMainWindowHandle(string processName);
+
+    bool SetForegroundWindow(IntPtr windowHandle);
+
+    void SendAltEnter();
+
     void Start(ProcessStartInfo startInfo);
 }
 
@@ -196,9 +244,47 @@ internal sealed class ProcessAdapter : IProcessAdapter
     public bool IsProcessRunning(string processName) =>
         Process.GetProcessesByName(processName).Length > 0;
 
+    public IntPtr GetMainWindowHandle(string processName)
+    {
+        foreach (var process in Process.GetProcessesByName(processName))
+        {
+            process.Refresh();
+            if (process.MainWindowHandle != IntPtr.Zero)
+            {
+                return process.MainWindowHandle;
+            }
+        }
+
+        return IntPtr.Zero;
+    }
+
+    public bool SetForegroundWindow(IntPtr windowHandle) =>
+        NativeMethods.SetForegroundWindow(windowHandle);
+
+    public void SendAltEnter()
+    {
+        NativeMethods.keybd_event(VkMenu, 0, 0, UIntPtr.Zero);
+        NativeMethods.keybd_event(VkReturn, 0, 0, UIntPtr.Zero);
+        NativeMethods.keybd_event(VkReturn, 0, KeyEventKeyUp, UIntPtr.Zero);
+        NativeMethods.keybd_event(VkMenu, 0, KeyEventKeyUp, UIntPtr.Zero);
+    }
+
     public void Start(ProcessStartInfo startInfo)
     {
         _ = Process.Start(startInfo) ?? throw new InvalidOperationException("Process launch returned no process handle.");
+    }
+
+    private const byte VkMenu = 0x12;
+    private const byte VkReturn = 0x0D;
+    private const uint KeyEventKeyUp = 0x0002;
+
+    private static class NativeMethods
+    {
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
     }
 }
 

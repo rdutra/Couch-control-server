@@ -14,6 +14,7 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
     private readonly IDisplayManager displayManager;
     private readonly IDisplayMatchingService displayMatchingService;
     private readonly ISteamLauncher steamLauncher;
+    private readonly IModeAutomationService modeAutomationService;
     private readonly IDisplaySnapshotStore snapshotStore;
     private readonly IDisplayOperationJournalStore journalStore;
     private readonly ILogger<ProfileOrchestrator> logger;
@@ -26,6 +27,7 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
         IDisplayManager displayManager,
         IDisplayMatchingService displayMatchingService,
         ISteamLauncher steamLauncher,
+        IModeAutomationService modeAutomationService,
         IDisplaySnapshotStore snapshotStore,
         IDisplayOperationJournalStore journalStore,
         ILogger<ProfileOrchestrator> logger,
@@ -35,6 +37,7 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
         this.displayManager = displayManager;
         this.displayMatchingService = displayMatchingService;
         this.steamLauncher = steamLauncher;
+        this.modeAutomationService = modeAutomationService;
         this.snapshotStore = snapshotStore;
         this.journalStore = journalStore;
         this.logger = logger;
@@ -218,6 +221,9 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
                     AgentOperationState.Failed);
             }
 
+            var couchAudioResult = await RunPostActivationCommandAsync(AgentMode.Couch, configuration, cancellationToken);
+            displayResult = MergePostActivationResult(displayResult, couchAudioResult);
+
             if (!configuration.LaunchSteamAutomatically)
             {
                 await CompleteJournalAsync(operationId, cancellationToken);
@@ -353,6 +359,7 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
         {
             cancellationToken.ThrowIfCancellationRequested();
 
+            var configuration = await configurationStore.LoadAsync(cancellationToken);
             UpdateStep(ProfileOperationStep.LoadingSnapshot);
             var pendingJournal = await journalStore.LoadAsync(cancellationToken);
             var recoveringInterruptedOperation = pendingJournal is { IsInProgress: true };
@@ -384,6 +391,14 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
                 snapshot,
                 new RestoreSnapshotOptions(dryRun, forceFallback),
                 cancellationToken);
+
+            if (displayResult.Succeeded)
+            {
+                var desktopAudioResult = await RunPostActivationCommandAsync(AgentMode.Desktop, configuration, cancellationToken);
+                displayResult = MergePostActivationResult(displayResult, desktopAudioResult);
+                var steamExitResult = await steamLauncher.ExitBigPictureAsync(cancellationToken);
+                displayResult = MergePostActivationResult(displayResult, steamExitResult);
+            }
 
             var activationStatus = displayResult.Succeeded
                 ? displayResult.IsPartialSuccess
@@ -515,11 +530,12 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
             }
 
             if (!dryRun &&
-                string.Equals(displayResult.ErrorCode, "display_switch_verification_failed", StringComparison.OrdinalIgnoreCase) &&
+                ShouldRetryActivationAfterTvPreparation(displayResult.ErrorCode) &&
                 !string.IsNullOrWhiteSpace(configuration.TvPreparationCommand))
             {
                 logger.LogInformation(
-                    "Display activation verification failed. Running the configured TV preparation command and retrying once.");
+                    "Display activation reported {ErrorCode}. Running the configured TV preparation command and retrying once.",
+                    displayResult.ErrorCode);
 
                 var preparationResult = await displayManager.PrepareForCouchModeAsync(configuration, cancellationToken);
                 if (!preparationResult.Succeeded)
@@ -599,6 +615,10 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
             displayResult.Details);
     }
 
+    private static bool ShouldRetryActivationAfterTvPreparation(string? errorCode) =>
+        string.Equals(errorCode, "display_switch_verification_failed", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(errorCode, "display_target_inactive_after_extend", StringComparison.OrdinalIgnoreCase);
+
     private static OperationResult WrapSteamResult(OperationResult steamLaunchResult)
     {
         var details = new List<string>
@@ -620,6 +640,40 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
                 steamLaunchResult.ErrorCode,
                 outcome: "Failure",
                 details: details);
+    }
+
+    private async Task<OperationResult> RunPostActivationCommandAsync(
+        AgentMode mode,
+        AgentConfiguration configuration,
+        CancellationToken cancellationToken) =>
+        await modeAutomationService.RunPostActivationAsync(mode, configuration, cancellationToken);
+
+    private static OperationResult MergePostActivationResult(
+        OperationResult primaryResult,
+        OperationResult postActivationResult)
+    {
+        if (postActivationResult.Message == "No audio switch command configured.")
+        {
+            return primaryResult;
+        }
+
+        var details = primaryResult.Details
+            .Concat(postActivationResult.Details)
+            .Append(postActivationResult.Message)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        if (postActivationResult.Succeeded)
+        {
+            return primaryResult.IsPartialSuccess
+                ? OperationResult.PartialSuccess(primaryResult.Message, primaryResult.Outcome, details)
+                : OperationResult.Success(primaryResult.Message, primaryResult.Outcome, details);
+        }
+
+        return OperationResult.PartialSuccess(
+            $"{primaryResult.Message} Audio output was not switched automatically.",
+            primaryResult.Outcome,
+            details);
     }
 
     private ProfileActivationResult CreateConcurrentFailureResult(

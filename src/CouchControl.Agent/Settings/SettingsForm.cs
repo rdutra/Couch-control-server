@@ -11,6 +11,7 @@ public sealed class SettingsForm : Form
     private const string ApplicationName = "CouchControl.Agent";
 
     private readonly IAgentConfigurationStore configurationStore;
+    private readonly IAudioDeviceService audioDeviceService;
     private readonly IStartupRegistration startupRegistration;
     private readonly string startupCommandLine;
     private readonly IApiTokenStore apiTokenStore;
@@ -20,6 +21,8 @@ public sealed class SettingsForm : Form
     private readonly TextBox corsOriginsTextBox;
     private readonly TextBox apiTokenTextBox;
     private readonly ComboBox listeningInterfaceComboBox;
+    private readonly ComboBox couchAudioDeviceComboBox;
+    private readonly ComboBox desktopAudioDeviceComboBox;
     private readonly Label firewallRuleStatusValue;
     private readonly CheckBox launchSteamCheckBox;
     private readonly CheckBox automaticRecoveryCheckBox;
@@ -37,6 +40,7 @@ public sealed class SettingsForm : Form
 
     public SettingsForm(
         IAgentConfigurationStore configurationStore,
+        IAudioDeviceService audioDeviceService,
         IStartupRegistration startupRegistration,
         string startupCommandLine,
         IApiTokenStore apiTokenStore,
@@ -44,6 +48,7 @@ public sealed class SettingsForm : Form
         IWindowsFirewallRuleManager firewallRuleManager)
     {
         this.configurationStore = configurationStore;
+        this.audioDeviceService = audioDeviceService;
         this.startupRegistration = startupRegistration;
         this.startupCommandLine = startupCommandLine;
         this.apiTokenStore = apiTokenStore;
@@ -68,9 +73,11 @@ public sealed class SettingsForm : Form
         preferredModeValue = AddReadOnlyRow(layout, 1, "Preferred mode");
         apiPortTextBox = AddTextRow(layout, 2, "API port");
         listeningInterfaceComboBox = AddComboRow(layout, 3, "Listen on");
-        corsOriginsTextBox = AddTextRow(layout, 4, "CORS origins");
-        apiTokenTextBox = AddTextRow(layout, 5, "API token", isReadOnly: true);
-        firewallRuleStatusValue = AddReadOnlyRow(layout, 6, "Firewall rule");
+        couchAudioDeviceComboBox = AddComboRow(layout, 4, "Couch audio");
+        desktopAudioDeviceComboBox = AddComboRow(layout, 5, "Desktop audio");
+        corsOriginsTextBox = AddTextRow(layout, 6, "CORS origins");
+        apiTokenTextBox = AddTextRow(layout, 7, "API token", isReadOnly: true);
+        firewallRuleStatusValue = AddReadOnlyRow(layout, 8, "Firewall rule");
 
         launchSteamCheckBox = new CheckBox
         {
@@ -79,6 +86,7 @@ public sealed class SettingsForm : Form
             Margin = new Padding(0, 8, 0, 0)
         };
         layout.Controls.Add(launchSteamCheckBox, 1, 7);
+        layout.SetRow(launchSteamCheckBox, 9);
 
         automaticRecoveryCheckBox = new CheckBox
         {
@@ -87,6 +95,7 @@ public sealed class SettingsForm : Form
             Margin = new Padding(0, 8, 0, 0)
         };
         layout.Controls.Add(automaticRecoveryCheckBox, 1, 8);
+        layout.SetRow(automaticRecoveryCheckBox, 10);
 
         startWithWindowsCheckBox = new CheckBox
         {
@@ -95,6 +104,7 @@ public sealed class SettingsForm : Form
             Margin = new Padding(0, 8, 0, 0)
         };
         layout.Controls.Add(startWithWindowsCheckBox, 1, 9);
+        layout.SetRow(startWithWindowsCheckBox, 11);
 
         var firewallButtonPanel = new FlowLayoutPanel
         {
@@ -117,16 +127,16 @@ public sealed class SettingsForm : Form
 
         firewallButtonPanel.Controls.Add(recreateFirewallRuleButton);
         firewallButtonPanel.Controls.Add(removeFirewallRuleButton);
-        layout.Controls.Add(firewallButtonPanel, 1, 10);
+        layout.Controls.Add(firewallButtonPanel, 1, 12);
 
         var helpLabel = new Label
         {
-            Text = "TV selection and display mode are still configured through CouchControl.Cli. Restart the agent after changing the API port or listening interface. Firewall changes prompt for elevation only because Windows Defender Firewall is system-wide.",
+            Text = "TV selection and display mode are still configured through CouchControl.Cli. Audio devices can be selected here. Restart the agent after changing the API port or listening interface. Firewall changes prompt for elevation only because Windows Defender Firewall is system-wide.",
             AutoSize = true,
             MaximumSize = new Size(520, 0),
             Margin = new Padding(0, 12, 0, 0)
         };
-        layout.Controls.Add(helpLabel, 1, 11);
+        layout.Controls.Add(helpLabel, 1, 13);
 
         var buttonPanel = new FlowLayoutPanel
         {
@@ -152,7 +162,7 @@ public sealed class SettingsForm : Form
 
         buttonPanel.Controls.Add(saveButton);
         buttonPanel.Controls.Add(reloadButton);
-        layout.Controls.Add(buttonPanel, 1, 12);
+        layout.Controls.Add(buttonPanel, 1, 14);
 
         var pairedDevicesLabel = new Label
         {
@@ -162,7 +172,7 @@ public sealed class SettingsForm : Form
             Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold),
             Margin = new Padding(0, 20, 0, 4)
         };
-        layout.Controls.Add(pairedDevicesLabel, 0, 13);
+        layout.Controls.Add(pairedDevicesLabel, 0, 15);
 
         pairedDevicesListView = new ListView
         {
@@ -175,7 +185,7 @@ public sealed class SettingsForm : Form
         pairedDevicesListView.Columns.Add("Device", 180);
         pairedDevicesListView.Columns.Add("Paired", 140);
         pairedDevicesListView.Columns.Add("Last seen", 140);
-        layout.Controls.Add(pairedDevicesListView, 1, 13);
+        layout.Controls.Add(pairedDevicesListView, 1, 15);
 
         revokeDeviceButton = new Button
         {
@@ -185,7 +195,7 @@ public sealed class SettingsForm : Form
         };
         revokeDeviceButton.Click += async (_, _) => await RevokeSelectedDeviceAsync();
         pairedDevicesListView.SelectedIndexChanged += (_, _) => revokeDeviceButton.Enabled = pairedDevicesListView.SelectedItems.Count > 0 && !isBusy;
-        layout.Controls.Add(revokeDeviceButton, 1, 14);
+        layout.Controls.Add(revokeDeviceButton, 1, 16);
 
         Controls.Add(layout);
 
@@ -209,6 +219,7 @@ public sealed class SettingsForm : Form
             preferredModeValue.Text = $"{configuration.PreferredCouchWidth}x{configuration.PreferredCouchHeight} @ {configuration.PreferredCouchRefreshRateHz} Hz";
             apiPortTextBox.Text = configuration.ApiPort.ToString();
             LoadListeningInterfaceOptions(configuration.ApiListeningInterfaceId);
+            await LoadAudioDeviceOptionsAsync(configuration.CouchAudioDeviceId, configuration.DesktopAudioDeviceId);
             corsOriginsTextBox.Text = string.Join(", ", configuration.CorsAllowedOrigins);
             apiTokenTextBox.Text = await apiTokenStore.GetTokenAsync();
             firewallRuleStatusValue.Text = firewallRuleManager.GetStatus(configuration.ApiPort).StatusText;
@@ -235,6 +246,10 @@ public sealed class SettingsForm : Form
                 AutomaticallyRecoverInterruptedDisplayOperations = automaticRecoveryCheckBox.Checked,
                 ApiPort = ParseApiPort(),
                 ApiListeningInterfaceId = ParseListeningInterfaceId(),
+                CouchAudioDeviceId = ParseSelectedAudioDeviceId(couchAudioDeviceComboBox),
+                CouchAudioDeviceName = ParseSelectedAudioDeviceName(couchAudioDeviceComboBox),
+                DesktopAudioDeviceId = ParseSelectedAudioDeviceId(desktopAudioDeviceComboBox),
+                DesktopAudioDeviceName = ParseSelectedAudioDeviceName(desktopAudioDeviceComboBox),
                 CorsAllowedOrigins = ParseCorsOrigins()
             };
 
@@ -253,6 +268,8 @@ public sealed class SettingsForm : Form
         startWithWindowsCheckBox.Enabled = false;
         apiPortTextBox.Enabled = false;
         listeningInterfaceComboBox.Enabled = false;
+        couchAudioDeviceComboBox.Enabled = false;
+        desktopAudioDeviceComboBox.Enabled = false;
         corsOriginsTextBox.Enabled = false;
         pairedDevicesListView.Enabled = false;
         revokeDeviceButton.Enabled = false;
@@ -273,6 +290,8 @@ public sealed class SettingsForm : Form
             startWithWindowsCheckBox.Enabled = true;
             apiPortTextBox.Enabled = true;
             listeningInterfaceComboBox.Enabled = true;
+            couchAudioDeviceComboBox.Enabled = true;
+            desktopAudioDeviceComboBox.Enabled = true;
             corsOriginsTextBox.Enabled = true;
             pairedDevicesListView.Enabled = true;
             revokeDeviceButton.Enabled = pairedDevicesListView.SelectedItems.Count > 0;
@@ -411,6 +430,16 @@ public sealed class SettingsForm : Form
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
+    private static string? ParseSelectedAudioDeviceId(ComboBox comboBox) =>
+        comboBox.SelectedItem is AudioDeviceItem item && !string.IsNullOrWhiteSpace(item.Id)
+            ? item.Id
+            : null;
+
+    private static string? ParseSelectedAudioDeviceName(ComboBox comboBox) =>
+        comboBox.SelectedItem is AudioDeviceItem item && !string.IsNullOrWhiteSpace(item.Id)
+            ? item.FriendlyName
+            : null;
+
     private void LoadListeningInterfaceOptions(string? selectedInterfaceId)
     {
         listeningInterfaceComboBox.Items.Clear();
@@ -433,6 +462,63 @@ public sealed class SettingsForm : Form
 
         listeningInterfaceComboBox.SelectedItem = items.FirstOrDefault(item => string.Equals(item.Id, requestedId, StringComparison.OrdinalIgnoreCase))
             ?? items[0];
+    }
+
+    private async Task LoadAudioDeviceOptionsAsync(string? selectedCouchAudioDeviceId, string? selectedDesktopAudioDeviceId)
+    {
+        try
+        {
+            var devices = await audioDeviceService.GetPlaybackDevicesAsync();
+            var items = new List<AudioDeviceItem>
+            {
+                new(null, null, "Not configured")
+            };
+
+            items.AddRange(devices.Select(static device =>
+                new AudioDeviceItem(
+                    device.Id,
+                    device.FriendlyName,
+                    device.IsDefault ? $"{device.FriendlyName} (Default)" : device.FriendlyName)));
+
+            LoadAudioDeviceOptions(couchAudioDeviceComboBox, items, selectedCouchAudioDeviceId);
+            LoadAudioDeviceOptions(desktopAudioDeviceComboBox, items, selectedDesktopAudioDeviceId);
+        }
+        catch
+        {
+            LoadAudioDeviceOptions(
+                couchAudioDeviceComboBox,
+                CreateUnavailableAudioDeviceItems(selectedCouchAudioDeviceId),
+                selectedCouchAudioDeviceId);
+            LoadAudioDeviceOptions(
+                desktopAudioDeviceComboBox,
+                CreateUnavailableAudioDeviceItems(selectedDesktopAudioDeviceId),
+                selectedDesktopAudioDeviceId);
+        }
+    }
+
+    private static void LoadAudioDeviceOptions(ComboBox comboBox, IReadOnlyList<AudioDeviceItem> items, string? selectedDeviceId)
+    {
+        comboBox.Items.Clear();
+        comboBox.Items.AddRange(items.Cast<object>().ToArray());
+
+        comboBox.SelectedItem = items.FirstOrDefault(item => string.Equals(item.Id, selectedDeviceId, StringComparison.OrdinalIgnoreCase))
+            ?? items[0];
+    }
+
+    private static IReadOnlyList<AudioDeviceItem> CreateUnavailableAudioDeviceItems(string? selectedDeviceId)
+    {
+        var items = new List<AudioDeviceItem>
+        {
+            new(null, null, "Not configured"),
+            new(null, null, "Audio devices unavailable")
+        };
+
+        if (!string.IsNullOrWhiteSpace(selectedDeviceId))
+        {
+            items.Add(new AudioDeviceItem(selectedDeviceId, selectedDeviceId, $"{selectedDeviceId} (saved)"));
+        }
+
+        return items;
     }
 
     private async Task RecreateFirewallRuleAsync()
@@ -497,6 +583,11 @@ public sealed class SettingsForm : Form
     }
 
     private sealed record ListeningInterfaceItem(string Id, string Label)
+    {
+        public override string ToString() => Label;
+    }
+
+    private sealed record AudioDeviceItem(string? Id, string? FriendlyName, string Label)
     {
         public override string ToString() => Label;
     }

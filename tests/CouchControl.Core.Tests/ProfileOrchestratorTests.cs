@@ -274,6 +274,35 @@ public sealed class ProfileOrchestratorTests
     }
 
     [Fact]
+    public async Task ActivateCouchModeAsync_RetriesActivationAfterInactiveTargetFailureWhenTvPreparationIsConfigured()
+    {
+        var targetDisplay = CreateDisplayDevice(@"\\?\DISPLAY#SAM0F8C#1", "Samsung TV", isActive: false);
+        var displayManager = new FakeDisplayManager
+        {
+            ConnectedDisplays = [targetDisplay],
+            SnapshotToCapture = CreateSnapshot(targetDisplay),
+            ActivateOnlyResults = new Queue<OperationResult>(new[]
+            {
+                OperationResult.Failure("tv inactive", "display_target_inactive_after_extend"),
+                OperationResult.Success("switched")
+            }),
+            PrepareForCouchModeResult = OperationResult.Success("prepared")
+        };
+        var configurationStore = new FakeConfigurationStore(CreateConfiguration(targetDisplay) with
+        {
+            TvPreparationCommand = "cec-switch-tv-input",
+            LaunchSteamAutomatically = false
+        });
+        var orchestrator = CreateOrchestrator(configurationStore, displayManager, new FakeSnapshotStore());
+
+        var result = await orchestrator.ActivateCouchModeAsync();
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(2, displayManager.ActivateOnlyCallCount);
+        Assert.Equal(2, displayManager.PrepareForCouchModeCallCount);
+    }
+
+    [Fact]
     public async Task ActivateCouchModeAsync_AttemptsRollbackWhenDisplayActivationFails()
     {
         var targetDisplay = CreateDisplayDevice(@"\\?\DISPLAY#SAM0F8C#1", "Samsung TV", isActive: false);
@@ -632,6 +661,7 @@ public sealed class ProfileOrchestratorTests
             displayManager,
             new DisplayMatchingService(),
             steamLauncher ?? new FakeSteamLauncher(),
+            new FakeModeAutomationService(),
             snapshotStore,
             journalStore ?? new FakeJournalStore(),
             NullLogger<ProfileOrchestrator>.Instance);
@@ -796,6 +826,17 @@ public sealed class ProfileOrchestratorTests
         }
     }
 
+    private sealed class FakeModeAutomationService : IModeAutomationService
+    {
+        public OperationResult Result { get; init; } = OperationResult.Success("No audio switch command configured.");
+
+        public Task<OperationResult> RunPostActivationAsync(
+            AgentMode mode,
+            AgentConfiguration configuration,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(Result);
+    }
+
     private sealed record ActivateOnlyCall(DisplayIdentifier Display, DisplayMode? PreferredMode, bool DryRun);
 
     private sealed class FakeSnapshotStore : IDisplaySnapshotStore
@@ -871,5 +912,8 @@ public sealed class ProfileOrchestratorTests
             AgentConfiguration configuration,
             CancellationToken cancellationToken = default) =>
             Task.FromResult(StartResult);
+
+        public Task<OperationResult> ExitBigPictureAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(OperationResult.Success("steam exited"));
     }
 }

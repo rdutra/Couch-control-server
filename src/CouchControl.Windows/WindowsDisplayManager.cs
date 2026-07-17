@@ -226,9 +226,38 @@ public sealed class WindowsDisplayManager : IDisplayManager
                 "Attempting explicit single-display activation"
             };
 
+            if (!dryRun && !targetContext.IsActive)
+            {
+                var preActivationResult = await EnsureDisplayIsActiveBeforeSingleDisplayActivationAsync(
+                    display,
+                    details,
+                    cancellationToken);
+
+                if (!preActivationResult.Succeeded)
+                {
+                    return preActivationResult;
+                }
+
+                if (preActivationResult.Details.Count > details.Count)
+                {
+                    details = preActivationResult.Details.ToList();
+                }
+            }
+
+            var activationConfiguration = QueryDisplayConfiguration(NativeMethods.QDC_ALL_PATHS);
+            var activationContexts = BuildDisplayContexts(activationConfiguration);
+            var activationTarget = activationContexts.FirstOrDefault(context => context.Identifier.Matches(display));
+            if (activationTarget is null)
+            {
+                return OperationResult.Failure(
+                    $"Configured TV '{display}' is not connected.",
+                    "display_not_connected",
+                    details: details);
+            }
+
             var activationResult = TryApplySingleDisplayDeviceSettings(
-                BuildDisplayContexts(configuration),
-                targetContext,
+                activationContexts,
+                activationTarget,
                 selectedSourceMode.SourceMode,
                 dryRun,
                 details);
@@ -324,6 +353,54 @@ public sealed class WindowsDisplayManager : IDisplayManager
             retryResult.ErrorCode,
             outcome: "single_display_extend_fallback_failed",
             details: retryResult.Details);
+    }
+
+    private async Task<OperationResult> EnsureDisplayIsActiveBeforeSingleDisplayActivationAsync(
+        DisplayIdentifier display,
+        List<string> seedDetails,
+        CancellationToken cancellationToken)
+    {
+        var details = new List<string>(seedDetails)
+        {
+            "Target display is not active yet; attempting DisplaySwitch.exe /extend before single-display activation"
+        };
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var fallbackExitCode = await _displaySystem.RunDisplaySwitchExtendAsync(cancellationToken);
+        details.Add($"DisplaySwitch.exe exited with code {fallbackExitCode}");
+
+        _logger?.LogInformation(
+            "Waiting {DelayMs} ms for the extended topology to settle before checking whether the target display became active.",
+            (int)ExtendFallbackSettleDelay.TotalMilliseconds);
+        await Task.Delay(ExtendFallbackSettleDelay, cancellationToken);
+
+        var extendedConfiguration = QueryDisplayConfiguration(NativeMethods.QDC_ALL_PATHS);
+        var extendedContexts = BuildDisplayContexts(extendedConfiguration);
+        var refreshedTarget = extendedContexts.FirstOrDefault(context => context.Identifier.Matches(display));
+        if (refreshedTarget is null)
+        {
+            return OperationResult.Failure(
+                $"Activation fallback did not leave '{display}' connected.",
+                "display_switch_verification_failed",
+                outcome: "single_display_pre_activation_extend_failed",
+                details: details);
+        }
+
+        if (!refreshedTarget.IsActive)
+        {
+            details.Add($"Aborted single-display activation because '{refreshedTarget.FriendlyName}' is still inactive after extend fallback.");
+            return OperationResult.Failure(
+                $"'{refreshedTarget.FriendlyName}' did not become active after the extend fallback. Leaving the current desktop display unchanged.",
+                "display_target_inactive_after_extend",
+                outcome: "single_display_pre_activation_extend_failed",
+                details: details);
+        }
+
+        details.Add($"Confirmed '{refreshedTarget.FriendlyName}' is active after extend fallback.");
+        return OperationResult.Success(
+            $"Confirmed '{refreshedTarget.FriendlyName}' is active after extend fallback.",
+            outcome: "single_display_pre_activation_extend",
+            details: details);
     }
 
     public async Task<OperationResult> RestoreSnapshotAsync(

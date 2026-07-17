@@ -86,7 +86,7 @@ public sealed class JsonDisplaySnapshotStore : IDisplaySnapshotStore
 
         var persisted = PersistedDisplaySnapshot.FromDomain(snapshot);
         await AtomicJsonFile.WriteAsync(filePath, persisted, JsonOptions, cancellationToken);
-        await AtomicJsonFile.WriteAsync(GetSnapshotFilePath(snapshot.SnapshotId), persisted, JsonOptions, cancellationToken);
+        PruneSnapshotFiles();
     }
 
     public async Task SavePendingAsync(DisplaySnapshot snapshot, CancellationToken cancellationToken = default)
@@ -100,11 +100,13 @@ public sealed class JsonDisplaySnapshotStore : IDisplaySnapshotStore
         }
 
         Directory.CreateDirectory(snapshotsDirectory);
+        var pendingPath = GetSnapshotFilePath(snapshot.SnapshotId);
         await AtomicJsonFile.WriteAsync(
-            GetSnapshotFilePath(snapshot.SnapshotId),
+            pendingPath,
             PersistedDisplaySnapshot.FromDomain(snapshot),
             JsonOptions,
             cancellationToken);
+        PruneSnapshotFiles(snapshot.SnapshotId);
     }
 
     public async Task<DisplaySnapshot?> LoadByIdAsync(string snapshotId, CancellationToken cancellationToken = default)
@@ -149,11 +151,48 @@ public sealed class JsonDisplaySnapshotStore : IDisplaySnapshotStore
             File.Delete(filePath);
         }
 
+        if (Directory.Exists(snapshotsDirectory))
+        {
+            foreach (var snapshotPath in Directory.GetFiles(snapshotsDirectory, "*.json", SearchOption.TopDirectoryOnly))
+            {
+                if (string.Equals(snapshotPath, filePath, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                File.Delete(snapshotPath);
+            }
+        }
+
         return Task.CompletedTask;
     }
 
     private string GetSnapshotFilePath(string snapshotId) =>
         Path.Combine(snapshotsDirectory, $"{snapshotId}.json");
+
+    private void PruneSnapshotFiles(params string[] snapshotIdsToKeep)
+    {
+        if (!Directory.Exists(snapshotsDirectory))
+        {
+            return;
+        }
+
+        var keepPaths = snapshotIdsToKeep
+            .Where(static snapshotId => !string.IsNullOrWhiteSpace(snapshotId))
+            .Select(GetSnapshotFilePath)
+            .Append(filePath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var snapshotPath in Directory.GetFiles(snapshotsDirectory, "*.json", SearchOption.TopDirectoryOnly))
+        {
+            if (keepPaths.Contains(snapshotPath))
+            {
+                continue;
+            }
+
+            File.Delete(snapshotPath);
+        }
+    }
 
     private sealed record PersistedDisplaySnapshot
     {

@@ -304,6 +304,7 @@ public sealed class AgentApiIntegrationTests
             builder.Services.AddSingleton<IDisplayOperationJournalStore, JsonDisplayOperationJournalStore>();
             builder.Services.AddSingleton<IDisplayManager>(new FakeDisplayManager(activationGate));
             builder.Services.AddSingleton<ISteamLauncher>(new FakeSteamLauncher());
+            builder.Services.AddSingleton<IModeAutomationService, FakeModeAutomationService>();
             builder.Services.AddSingleton<IDisplayMatchingService, DisplayMatchingService>();
             builder.Services.AddSingleton<ProfileOrchestrator>();
             builder.Services.AddSingleton<IProfileOrchestrator>(static services => services.GetRequiredService<ProfileOrchestrator>());
@@ -405,6 +406,18 @@ public sealed class AgentApiIntegrationTests
 
         public Task<OperationResult> StartBigPictureAsync(AgentConfiguration configuration, CancellationToken cancellationToken = default) =>
             Task.FromResult(OperationResult.Success("Steam started.", outcome: "Success"));
+
+        public Task<OperationResult> ExitBigPictureAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(OperationResult.Success("Steam exited.", outcome: "Success"));
+    }
+
+    private sealed class FakeModeAutomationService : IModeAutomationService
+    {
+        public Task<OperationResult> RunPostActivationAsync(
+            AgentMode mode,
+            AgentConfiguration configuration,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(OperationResult.Success("No audio switch command configured."));
     }
 
     private sealed class PassthroughProtectedDataService : IProtectedDataService

@@ -74,6 +74,14 @@ Optionally control Steam auto-launch:
 CouchControl.Cli configure set-steam --enabled true
 ```
 
+Optionally configure audio devices:
+
+```bash
+CouchControl.Cli configure list-audio-devices
+CouchControl.Cli configure set-couch-audio-device --device-id "your-tv-audio-device-id"
+CouchControl.Cli configure set-desktop-audio-device --device-id "your-desktop-audio-device-id"
+```
+
 Inspect the saved configuration:
 
 ```bash
@@ -188,6 +196,14 @@ CouchControl.Cli couch
 ```
 
 `couch` requires a saved desktop snapshot from `CouchControl.Cli snapshot capture`. The command captures a temporary rollback snapshot for the current run, but it does not replace the saved desktop baseline.
+
+CouchControl also prunes stale snapshot files automatically. On disk it keeps the saved desktop baseline and, while a couch switch is in progress, at most one temporary rollback snapshot for recovery.
+
+If a couch audio device is configured, Couch mode switches Windows to that playback device after the display switch succeeds. If a desktop audio device is configured, Desktop mode switches Windows back after the desktop display restore succeeds.
+
+If the target TV is currently inactive, `couch` first tries `DisplaySwitch.exe /extend` to wake that HDMI path before disabling the current monitor. If a TV preparation command is configured, CouchControl retries that command and attempts the display switch once more before giving up. If the TV still does not become active, CouchControl aborts the switch and leaves the current desktop display in place.
+
+On most PCs, CouchControl itself cannot generate Nintendo Switch-style HDMI-CEC power-on behavior through the GPU alone. To wake the TV or force the correct input, configure a TV preparation command that calls a utility or integration that your hardware actually supports.
 
 To validate the configured TV selection and mode resolution without calling `SetDisplayConfig`, use:
 
@@ -352,9 +368,12 @@ Expected behavior:
 
 ### Current Limitations For Live Testing
 
-- TV selection and preferred display mode are still configured through the CLI; the tray settings window currently exposes status, Steam auto-launch, and start-with-Windows behavior rather than full display selection.
+- TV selection and preferred display mode are still configured through the CLI.
+- Couch and desktop audio devices can be selected from the tray settings window or through the CLI.
 - `desktop` restores only the snapshot you saved manually with `snapshot capture`; Couch mode no longer refreshes that baseline automatically.
+- Old rollback snapshot files are pruned automatically; only the saved desktop baseline and the current in-progress rollback snapshot are retained.
 - Rollback is attempted automatically only when the switch or post-switch verification fails during the `couch` operation.
+- If the configured TV is off or HDMI-CEC/input switching does not wake it, `couch` retries the configured TV preparation command once more and then aborts before detaching the active desktop monitor.
 - Native integration tests are intentionally skipped by default because they would change active displays during a normal test run.
 
 When JSON output is requested, any diagnostic logging is redirected to standard error (`stderr`), keeping standard output (`stdout`) pure and directly parseable:
@@ -406,28 +425,58 @@ Connected displays:
     Device path: \\?\DISPLAY#SAM0F8C#4&2d364fa6&0&UID8388608
 ```
 
-#### 2. Set Couch Display (TV)
+#### 2. List Playback Audio Devices
+Lists active playback devices together with their full device IDs:
+```bash
+CouchControl.Cli configure list-audio-devices
+```
+
+#### 3. Set Couch Display (TV)
 Configures the couch display by passing its 8-character stable short ID or full device path. It validates that the display exists, parses its hardware manufacturer/product identity, and saves it:
 ```bash
 CouchControl.Cli configure set-tv --display-id "f52d3a7e"
 ```
 
-#### 3. Set Preferred Couch Display Mode
+#### 4. Set Preferred Couch Display Mode
 Configures the preferred resolution and refresh rate for couch mode:
 ```bash
 CouchControl.Cli configure set-mode --width 3840 --height 2160 --refresh-rate 60
 ```
 
-#### 4. Configure Steam Auto-Launch
+#### 5. Configure Steam Auto-Launch
 Configures whether Steam Big Picture should launch automatically upon entering couch mode:
 ```bash
 CouchControl.Cli configure set-steam --enabled true
 ```
 
-#### 5. Show Current Configuration
+#### 6. Set Couch Audio Device
+Configures the playback device that should become default in Couch mode:
+```bash
+CouchControl.Cli configure set-couch-audio-device --device-id "your-tv-audio-device-id"
+```
+
+#### 7. Set Desktop Audio Device
+Configures the playback device that should become default in Desktop mode:
+```bash
+CouchControl.Cli configure set-desktop-audio-device --device-id "your-desktop-audio-device-id"
+```
+
+#### 8. Show Current Configuration
 Prints the current configuration state:
 ```bash
 CouchControl.Cli configure show
+```
+
+#### 9. Optional: Configure Couch Audio Command Fallback
+Configures a command that should run after Couch mode becomes active if you prefer an external utility instead of direct device selection:
+```bash
+CouchControl.Cli configure set-couch-audio --command "your-audio-switch-command-for-tv"
+```
+
+#### 10. Optional: Configure Desktop Audio Command Fallback
+Configures a command that should run after Desktop mode is restored if you prefer an external utility instead of direct device selection:
+```bash
+CouchControl.Cli configure set-desktop-audio --command "your-audio-switch-command-for-desktop"
 ```
 
 ### Snapshot Management

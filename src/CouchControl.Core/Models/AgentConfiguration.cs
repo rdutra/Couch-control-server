@@ -26,6 +26,18 @@ public sealed record AgentConfiguration
 
     public int TvPreparationDelayMs { get; init; } = 4000;
 
+    public string? CouchAudioCommand { get; init; }
+
+    public string? DesktopAudioCommand { get; init; }
+
+    public string? CouchAudioDeviceId { get; init; }
+
+    public string? CouchAudioDeviceName { get; init; }
+
+    public string? DesktopAudioDeviceId { get; init; }
+
+    public string? DesktopAudioDeviceName { get; init; }
+
     public int ApiPort { get; init; } = 47981;
 
     public string? ApiListeningInterfaceId { get; init; }
@@ -63,6 +75,30 @@ public sealed record AgentConfiguration
         if (TvPreparationDelayMs is < 0 or > 60000)
         {
             return OperationResult.Failure("TV preparation delay must be between 0 and 60000 milliseconds.", "invalid_tv_preparation_delay");
+        }
+
+        if (CouchAudioCommand is { Length: > 0 } couchAudioCommand &&
+            string.IsNullOrWhiteSpace(couchAudioCommand))
+        {
+            return OperationResult.Failure("Couch audio command cannot be whitespace.", "invalid_couch_audio_command");
+        }
+
+        if (DesktopAudioCommand is { Length: > 0 } desktopAudioCommand &&
+            string.IsNullOrWhiteSpace(desktopAudioCommand))
+        {
+            return OperationResult.Failure("Desktop audio command cannot be whitespace.", "invalid_desktop_audio_command");
+        }
+
+        if (CouchAudioDeviceId is { Length: > 0 } couchAudioDeviceId &&
+            string.IsNullOrWhiteSpace(couchAudioDeviceId))
+        {
+            return OperationResult.Failure("Couch audio device ID cannot be whitespace.", "invalid_couch_audio_device_id");
+        }
+
+        if (DesktopAudioDeviceId is { Length: > 0 } desktopAudioDeviceId &&
+            string.IsNullOrWhiteSpace(desktopAudioDeviceId))
+        {
+            return OperationResult.Failure("Desktop audio device ID cannot be whitespace.", "invalid_desktop_audio_device_id");
         }
 
         if (ApiPort is < 1 or > 65535)

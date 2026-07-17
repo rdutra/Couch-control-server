@@ -10,4 +10,7 @@ public interface ISteamLauncher
     Task<OperationResult> StartBigPictureAsync(
         AgentConfiguration configuration,
         CancellationToken cancellationToken = default);
+
+    Task<OperationResult> ExitBigPictureAsync(
+        CancellationToken cancellationToken = default);
 }

@@ -8,7 +8,7 @@ namespace CouchControl.Core.Tests;
 public sealed class WindowsDisplayManagerRestoreTests
 {
     [Fact]
-    public async Task ActivateOnlyAsync_UsesExplicitDeviceSettingsActivation()
+    public async Task ActivateOnlyAsync_PrimesInactiveDisplayWithExtendBeforeExplicitActivation()
     {
         var adapterId = new LUID { HighPart = 1, LowPart = 1 };
         var ultrawidePath = @"\\?\DISPLAY#GBT3406#5&371a1502&0&UID33024#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}";
@@ -17,6 +17,10 @@ public sealed class WindowsDisplayManagerRestoreTests
         var currentTopology = QueryState.Create(
             CreateDisplay(adapterId, 0, 33024, ultrawidePath, "GS34WQC", isActive: true, width: 3440, height: 1440, positionX: 0, positionY: 0, outputTechnology: DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY.DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EXTERNAL),
             CreateDisplay(adapterId, 1, 33029, tvPath, "SAMSUNG", isActive: false, width: 3840, height: 2160, positionX: 3440, positionY: 0, outputTechnology: DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY.DISPLAYCONFIG_OUTPUT_TECHNOLOGY_HDMI));
+
+        var extendedTopology = QueryState.Create(
+            CreateDisplay(adapterId, 0, 33024, ultrawidePath, "GS34WQC", isActive: true, width: 3440, height: 1440, positionX: 0, positionY: 0, outputTechnology: DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY.DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EXTERNAL),
+            CreateDisplay(adapterId, 1, 33029, tvPath, "SAMSUNG", isActive: true, width: 3840, height: 2160, positionX: 3440, positionY: 0, outputTechnology: DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY.DISPLAYCONFIG_OUTPUT_TECHNOLOGY_HDMI));
 
         var activatedTopology = QueryState.Create(
             CreateDisplay(adapterId, 1, 33029, tvPath, "SAMSUNG", isActive: true, width: 1920, height: 1080, positionX: 0, positionY: 0, outputTechnology: DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY.DISPLAYCONFIG_OUTPUT_TECHNOLOGY_HDMI));
@@ -33,7 +37,10 @@ public sealed class WindowsDisplayManagerRestoreTests
             {
                 [(adapterId.LowPart, 0)] = "DISPLAY1",
                 [(adapterId.LowPart, 1)] = "DISPLAY2"
-            });
+            })
+        {
+            ExtendedState = extendedTopology
+        };
 
         var manager = new WindowsDisplayManager(displaySystem, NullLogger<WindowsDisplayManager>.Instance, skipPlatformCheck: true);
 
@@ -42,15 +49,56 @@ public sealed class WindowsDisplayManagerRestoreTests
         Assert.True(result.Succeeded);
         Assert.Equal("single_display_device_settings", result.Outcome);
         Assert.Contains("Attempting explicit single-display activation", result.Details);
+        Assert.Contains("Target display is not active yet; attempting DisplaySwitch.exe /extend before single-display activation", result.Details);
+        Assert.Contains("Confirmed 'SAMSUNG' is active after extend fallback.", result.Details);
         Assert.Contains("Detaching GS34WQC", result.Details);
         Assert.Contains("Configuring SAMSUNG as primary display", result.Details);
         Assert.Empty(displaySystem.SetDisplayConfigCalls);
+        Assert.Equal(1, displaySystem.DisplaySwitchExtendCallCount);
         Assert.Equal(2, displaySystem.ChangeDisplaySettingsExCalls.Count);
         Assert.Equal("DISPLAY1", displaySystem.ChangeDisplaySettingsExCalls[0].DeviceName);
         Assert.Equal("DISPLAY2", displaySystem.ChangeDisplaySettingsExCalls[1].DeviceName);
         Assert.Equal((uint)1920, displaySystem.ChangeDisplaySettingsExCalls[1].Width);
         Assert.Equal((uint)1080, displaySystem.ChangeDisplaySettingsExCalls[1].Height);
         Assert.Equal(1, displaySystem.CommitDisplaySettingsCallCount);
+    }
+
+    [Fact]
+    public async Task ActivateOnlyAsync_FailsSafelyWhenInactiveDisplayDoesNotWakeAfterExtend()
+    {
+        var adapterId = new LUID { HighPart = 1, LowPart = 1 };
+        var ultrawidePath = @"\\?\DISPLAY#GBT3406#5&371a1502&0&UID33024#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}";
+        var tvPath = @"\\?\DISPLAY#SAM735A#5&371a1502&0&UID33029#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}";
+
+        var currentTopology = QueryState.Create(
+            CreateDisplay(adapterId, 0, 33024, ultrawidePath, "GS34WQC", isActive: true, width: 3440, height: 1440, positionX: 0, positionY: 0, outputTechnology: DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY.DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EXTERNAL),
+            CreateDisplay(adapterId, 1, 33029, tvPath, "SAMSUNG", isActive: false, width: 3840, height: 2160, positionX: 3440, positionY: 0, outputTechnology: DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY.DISPLAYCONFIG_OUTPUT_TECHNOLOGY_HDMI));
+
+        var displaySystem = new FakeWindowsDisplaySystem(
+            currentTopology,
+            currentTopology,
+            supportedModes: new Dictionary<string, IReadOnlyList<DisplayMode>>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["DISPLAY1"] = [new DisplayMode(3440, 1440, 100)],
+                ["DISPLAY2"] = [new DisplayMode(1920, 1080, 60), new DisplayMode(3840, 2160, 60)]
+            },
+            sourceNames: new Dictionary<(uint AdapterLowPart, uint SourceId), string>
+            {
+                [(adapterId.LowPart, 0)] = "DISPLAY1",
+                [(adapterId.LowPart, 1)] = "DISPLAY2"
+            });
+
+        var manager = new WindowsDisplayManager(displaySystem, NullLogger<WindowsDisplayManager>.Instance, skipPlatformCheck: true);
+
+        var result = await manager.ActivateOnlyAsync(new DisplayIdentifier(tvPath), new DisplayMode(1920, 1080, 60));
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("display_target_inactive_after_extend", result.ErrorCode);
+        Assert.Contains("Leaving the current desktop display unchanged", result.Message);
+        Assert.Contains("Aborted single-display activation because 'SAMSUNG' is still inactive after extend fallback.", result.Details);
+        Assert.Equal(1, displaySystem.DisplaySwitchExtendCallCount);
+        Assert.Empty(displaySystem.ChangeDisplaySettingsExCalls);
+        Assert.Equal(0, displaySystem.CommitDisplaySettingsCallCount);
     }
 
     [Fact]
@@ -136,7 +184,7 @@ public sealed class WindowsDisplayManagerRestoreTests
         Assert.Equal("single_display_device_settings_after_extend_fallback", result.Outcome);
         Assert.Contains("Using activation fallback: DisplaySwitch.exe /extend", result.Details);
         Assert.Contains("Attempting explicit single-display activation after extend fallback", result.Details);
-        Assert.Equal(1, displaySystem.DisplaySwitchExtendCallCount);
+        Assert.Equal(2, displaySystem.DisplaySwitchExtendCallCount);
         Assert.Equal(4, displaySystem.ChangeDisplaySettingsExCalls.Count);
         Assert.Equal(2, displaySystem.CommitDisplaySettingsCallCount);
     }

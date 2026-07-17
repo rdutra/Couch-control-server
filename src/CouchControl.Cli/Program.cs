@@ -103,6 +103,8 @@ if (isConfigure)
     {
         case "list-displays":
             return await HandleListDisplays(host, isJson, logger);
+        case "list-audio-devices":
+            return await HandleListAudioDevices(host, isJson, logger);
         case "set-tv":
             int idIdx = argsList.IndexOf("--display-id");
             if (idIdx == -1 || idIdx + 1 >= argsList.Count)
@@ -163,6 +165,34 @@ if (isConfigure)
             }
 
             return await HandleSetTvPreparation(host, tvPreparationCommand, tvPreparationDelayMs, isJson, logger);
+        case "set-couch-audio":
+            int couchAudioCommandIdx = argsList.IndexOf("--command");
+            string? couchAudioCommand = couchAudioCommandIdx != -1 && couchAudioCommandIdx + 1 < argsList.Count
+                ? argsList[couchAudioCommandIdx + 1]
+                : null;
+            return await HandleSetAudioCommand(host, AgentMode.Couch, couchAudioCommand, isJson, logger);
+        case "set-desktop-audio":
+            int desktopAudioCommandIdx = argsList.IndexOf("--command");
+            string? desktopAudioCommand = desktopAudioCommandIdx != -1 && desktopAudioCommandIdx + 1 < argsList.Count
+                ? argsList[desktopAudioCommandIdx + 1]
+                : null;
+            return await HandleSetAudioCommand(host, AgentMode.Desktop, desktopAudioCommand, isJson, logger);
+        case "set-couch-audio-device":
+            int couchAudioDeviceIdx = argsList.IndexOf("--device-id");
+            if (couchAudioDeviceIdx == -1 || couchAudioDeviceIdx + 1 >= argsList.Count)
+            {
+                Console.Error.WriteLine("Error: Missing --device-id argument.");
+                return 1;
+            }
+            return await HandleSetAudioDevice(host, AgentMode.Couch, argsList[couchAudioDeviceIdx + 1], isJson, logger);
+        case "set-desktop-audio-device":
+            int desktopAudioDeviceIdx = argsList.IndexOf("--device-id");
+            if (desktopAudioDeviceIdx == -1 || desktopAudioDeviceIdx + 1 >= argsList.Count)
+            {
+                Console.Error.WriteLine("Error: Missing --device-id argument.");
+                return 1;
+            }
+            return await HandleSetAudioDevice(host, AgentMode.Desktop, argsList[desktopAudioDeviceIdx + 1], isJson, logger);
         case "show":
             return await HandleShow(host, isJson, logger);
         default:
@@ -196,10 +226,15 @@ static void PrintConfigureUsage()
     Console.WriteLine();
     Console.WriteLine("Usage:");
     Console.WriteLine("  CouchControl.Cli configure list-displays                             List connected displays with stable IDs");
+    Console.WriteLine("  CouchControl.Cli configure list-audio-devices                        List playback audio devices");
     Console.WriteLine("  CouchControl.Cli configure set-tv --display-id \"<stable-id>\"          Set the couch display (TV)");
     Console.WriteLine("  CouchControl.Cli configure set-mode --width W --height H --refresh-rate R   Set the preferred couch mode");
     Console.WriteLine("  CouchControl.Cli configure set-steam --enabled [true|false]          Enable/disable launching Steam automatically");
     Console.WriteLine("  CouchControl.Cli configure set-tv-prep [--command \"...\"] [--delay-ms N] Configure the command that prepares the TV/input before couch mode");
+    Console.WriteLine("  CouchControl.Cli configure set-couch-audio [--command \"...\"]        Configure the command that switches audio for couch mode");
+    Console.WriteLine("  CouchControl.Cli configure set-desktop-audio [--command \"...\"]      Configure the command that switches audio for desktop mode");
+    Console.WriteLine("  CouchControl.Cli configure set-couch-audio-device --device-id \"<id>\"   Set the couch playback device");
+    Console.WriteLine("  CouchControl.Cli configure set-desktop-audio-device --device-id \"<id>\" Set the desktop playback device");
     Console.WriteLine("  CouchControl.Cli configure show                                      Show current configuration");
 }
 
@@ -344,6 +379,45 @@ static async Task<int> HandleListDisplays(IHost host, bool isJson, ILogger logge
     catch (Exception ex)
     {
         logger.LogError(ex, "Failed to list displays.");
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        return 1;
+    }
+}
+
+static async Task<int> HandleListAudioDevices(IHost host, bool isJson, ILogger logger)
+{
+    try
+    {
+        var audioDeviceService = host.Services.GetRequiredService<IAudioDeviceService>();
+        var devices = await audioDeviceService.GetPlaybackDevicesAsync();
+
+        if (isJson)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(devices, new JsonSerializerOptions { WriteIndented = true }));
+            return 0;
+        }
+
+        Console.WriteLine("Playback audio devices:");
+        Console.WriteLine();
+
+        foreach (var device in devices)
+        {
+            Console.WriteLine($"{(device.IsDefault ? "*" : " ")} {device.FriendlyName}");
+            Console.WriteLine($"    Device ID: {device.Id}");
+            Console.WriteLine();
+        }
+
+        return 0;
+    }
+    catch (PlatformNotSupportedException ex)
+    {
+        logger.LogError(ex, "Platform not supported error: {Message}", ex.Message);
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        return 1;
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to list audio devices.");
         Console.Error.WriteLine($"Error: {ex.Message}");
         return 1;
     }
@@ -561,6 +635,120 @@ static async Task<int> HandleSetTvPreparation(
     }
 }
 
+static async Task<int> HandleSetAudioCommand(
+    IHost host,
+    AgentMode mode,
+    string? command,
+    bool isJson,
+    ILogger logger)
+{
+    try
+    {
+        var configStore = host.Services.GetRequiredService<IAgentConfigurationStore>();
+        var config = await configStore.LoadAsync();
+
+        var updatedConfig = mode == AgentMode.Couch
+            ? config with { CouchAudioCommand = string.IsNullOrWhiteSpace(command) ? null : command }
+            : config with { DesktopAudioCommand = string.IsNullOrWhiteSpace(command) ? null : command };
+
+        var validation = updatedConfig.Validate();
+        if (!validation.Succeeded)
+        {
+            Console.Error.WriteLine($"Error: Invalid configuration - {validation.Message}");
+            return 1;
+        }
+
+        await configStore.SaveAsync(updatedConfig);
+
+        var configuredCommand = mode == AgentMode.Couch
+            ? updatedConfig.CouchAudioCommand
+            : updatedConfig.DesktopAudioCommand;
+
+        if (isJson)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(new
+            {
+                Success = true,
+                Mode = mode.ToString(),
+                AudioCommand = configuredCommand
+            }));
+        }
+        else
+        {
+            Console.WriteLine(configuredCommand is null
+                ? $"{mode} audio command cleared."
+                : $"{mode} audio command configured.");
+        }
+
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to configure {Mode} audio command.", mode);
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        return 1;
+    }
+}
+
+static async Task<int> HandleSetAudioDevice(
+    IHost host,
+    AgentMode mode,
+    string deviceId,
+    bool isJson,
+    ILogger logger)
+{
+    try
+    {
+        var audioDeviceService = host.Services.GetRequiredService<IAudioDeviceService>();
+        var devices = await audioDeviceService.GetPlaybackDevicesAsync();
+        var selected = devices.FirstOrDefault(device => string.Equals(device.Id, deviceId, StringComparison.OrdinalIgnoreCase));
+        if (selected is null)
+        {
+            Console.Error.WriteLine($"Error: Audio device '{deviceId}' was not found.");
+            return 1;
+        }
+
+        var configStore = host.Services.GetRequiredService<IAgentConfigurationStore>();
+        var config = await configStore.LoadAsync();
+
+        var updatedConfig = mode == AgentMode.Couch
+            ? config with { CouchAudioDeviceId = selected.Id, CouchAudioDeviceName = selected.FriendlyName }
+            : config with { DesktopAudioDeviceId = selected.Id, DesktopAudioDeviceName = selected.FriendlyName };
+
+        var validation = updatedConfig.Validate();
+        if (!validation.Succeeded)
+        {
+            Console.Error.WriteLine($"Error: Invalid configuration - {validation.Message}");
+            return 1;
+        }
+
+        await configStore.SaveAsync(updatedConfig);
+
+        if (isJson)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(new
+            {
+                Success = true,
+                Mode = mode.ToString(),
+                AudioDeviceId = selected.Id,
+                AudioDeviceName = selected.FriendlyName
+            }));
+        }
+        else
+        {
+            Console.WriteLine($"{mode} audio device configured: {selected.FriendlyName}");
+        }
+
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to configure {Mode} audio device.", mode);
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        return 1;
+    }
+}
+
 static async Task<int> HandleShow(IHost host, bool isJson, ILogger logger)
 {
     try
@@ -599,6 +787,10 @@ static async Task<int> HandleShow(IHost host, bool isJson, ILogger logger)
         Console.WriteLine($"  Steam Executable Path:       {config.SteamExecutablePath ?? "Not configured (will search defaults)"}");
         Console.WriteLine($"  TV Preparation Command:      {config.TvPreparationCommand ?? "Not configured"}");
         Console.WriteLine($"  TV Preparation Delay:        {config.TvPreparationDelayMs} ms");
+        Console.WriteLine($"  Couch Audio Device:          {config.CouchAudioDeviceName ?? config.CouchAudioDeviceId ?? "Not configured"}");
+        Console.WriteLine($"  Desktop Audio Device:        {config.DesktopAudioDeviceName ?? config.DesktopAudioDeviceId ?? "Not configured"}");
+        Console.WriteLine($"  Couch Audio Command:         {config.CouchAudioCommand ?? "Not configured"}");
+        Console.WriteLine($"  Desktop Audio Command:       {config.DesktopAudioCommand ?? "Not configured"}");
 
         return 0;
     }

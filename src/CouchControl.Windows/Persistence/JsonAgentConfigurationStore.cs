@@ -93,6 +93,18 @@ public sealed class JsonAgentConfigurationStore : IAgentConfigurationStore
 
         public int TvPreparationDelayMs { get; init; } = 4000;
 
+        public string? CouchAudioCommand { get; init; }
+
+        public string? DesktopAudioCommand { get; init; }
+
+        public string? CouchAudioDeviceId { get; init; }
+
+        public string? CouchAudioDeviceName { get; init; }
+
+        public string? DesktopAudioDeviceId { get; init; }
+
+        public string? DesktopAudioDeviceName { get; init; }
+
         public int ApiPort { get; init; } = 47981;
 
         public string? ApiListeningInterfaceId { get; init; }
@@ -117,6 +129,24 @@ public sealed class JsonAgentConfigurationStore : IAgentConfigurationStore
                     ? null
                     : TvPreparationCommand.Trim(),
                 TvPreparationDelayMs = TvPreparationDelayMs is >= 0 and <= 60000 ? TvPreparationDelayMs : 4000,
+                CouchAudioCommand = string.IsNullOrWhiteSpace(CouchAudioCommand)
+                    ? null
+                    : CouchAudioCommand.Trim(),
+                DesktopAudioCommand = string.IsNullOrWhiteSpace(DesktopAudioCommand)
+                    ? null
+                    : DesktopAudioCommand.Trim(),
+                CouchAudioDeviceId = string.IsNullOrWhiteSpace(CouchAudioDeviceId)
+                    ? null
+                    : CouchAudioDeviceId.Trim(),
+                CouchAudioDeviceName = string.IsNullOrWhiteSpace(CouchAudioDeviceName)
+                    ? null
+                    : CouchAudioDeviceName.Trim(),
+                DesktopAudioDeviceId = string.IsNullOrWhiteSpace(DesktopAudioDeviceId)
+                    ? null
+                    : DesktopAudioDeviceId.Trim(),
+                DesktopAudioDeviceName = string.IsNullOrWhiteSpace(DesktopAudioDeviceName)
+                    ? null
+                    : DesktopAudioDeviceName.Trim(),
                 ApiPort = ApiPort is >= 1 and <= 65535 ? ApiPort : 47981,
                 ApiListeningInterfaceId = string.IsNullOrWhiteSpace(ApiListeningInterfaceId)
                     ? null
@@ -144,6 +174,24 @@ public sealed class JsonAgentConfigurationStore : IAgentConfigurationStore
                     ? null
                     : configuration.TvPreparationCommand.Trim(),
                 TvPreparationDelayMs = configuration.TvPreparationDelayMs,
+                CouchAudioCommand = string.IsNullOrWhiteSpace(configuration.CouchAudioCommand)
+                    ? null
+                    : configuration.CouchAudioCommand.Trim(),
+                DesktopAudioCommand = string.IsNullOrWhiteSpace(configuration.DesktopAudioCommand)
+                    ? null
+                    : configuration.DesktopAudioCommand.Trim(),
+                CouchAudioDeviceId = string.IsNullOrWhiteSpace(configuration.CouchAudioDeviceId)
+                    ? null
+                    : configuration.CouchAudioDeviceId.Trim(),
+                CouchAudioDeviceName = string.IsNullOrWhiteSpace(configuration.CouchAudioDeviceName)
+                    ? null
+                    : configuration.CouchAudioDeviceName.Trim(),
+                DesktopAudioDeviceId = string.IsNullOrWhiteSpace(configuration.DesktopAudioDeviceId)
+                    ? null
+                    : configuration.DesktopAudioDeviceId.Trim(),
+                DesktopAudioDeviceName = string.IsNullOrWhiteSpace(configuration.DesktopAudioDeviceName)
+                    ? null
+                    : configuration.DesktopAudioDeviceName.Trim(),
                 ApiPort = configuration.ApiPort,
                 ApiListeningInterfaceId = string.IsNullOrWhiteSpace(configuration.ApiListeningInterfaceId)
                     ? null
