@@ -69,12 +69,14 @@ public static class AgentApiApplicationExtensions
 
     private static async Task<IResult> GetStatusAsync(
         IAgentConfigurationStore configurationStore,
+        IDisplaySnapshotStore snapshotStore,
         IDisplayManager displayManager,
         IProfileOrchestrator orchestrator,
         ISteamLauncher steamLauncher,
         CancellationToken cancellationToken)
     {
         var configuration = await configurationStore.LoadAsync(cancellationToken);
+        var snapshot = await snapshotStore.LoadLastDesktopSnapshotAsync(cancellationToken);
         var displays = await displayManager.GetDisplaysAsync(cancellationToken);
         var status = orchestrator.GetStatus();
 
@@ -88,6 +90,10 @@ public static class AgentApiApplicationExtensions
             ToOperationValue(status.CurrentOperation, status.State),
             ToStepValue(status.CurrentStep, status.State),
             configuration.CouchDisplayIdentity?.FriendlyName ?? configuration.CouchDisplayIdentifier?.Value,
+            ToModeSummary(
+                configuration.CouchDisplayIdentity?.FriendlyName ?? configuration.CouchDisplayIdentifier?.Value,
+                configuration.PreferredCouchMode),
+            ToDesktopSnapshotSummary(snapshot),
             tvConnected,
             steamLauncher.IsInstalled(configuration),
             steamLauncher.IsRunning(),
@@ -243,6 +249,36 @@ public static class AgentApiApplicationExtensions
         state == AgentOperationState.Idle || step == ProfileOperationStep.None
             ? null
             : step.ToString();
+
+    private static ModeSummaryResponse? ToModeSummary(string? displayName, DisplayMode? mode) =>
+        mode is null
+            ? null
+            : new ModeSummaryResponse(displayName, mode.Width, mode.Height, mode.RefreshRateHz);
+
+    private static ModeSummaryResponse? ToDesktopSnapshotSummary(DisplaySnapshot? snapshot)
+    {
+        if (snapshot is null)
+        {
+            return null;
+        }
+
+        var primaryPath = snapshot.Paths.FirstOrDefault(static path => path.IsPrimary && path.IsActive);
+        var selectedPath = primaryPath ?? snapshot.Paths.FirstOrDefault(static path => path.IsActive);
+        if (selectedPath is null || selectedPath.SourceMode is null)
+        {
+            return null;
+        }
+
+        var displayName = snapshot.Displays
+            .FirstOrDefault(display => display.Identifier.Matches(selectedPath.Identifier))
+            ?.FriendlyName;
+
+        return new ModeSummaryResponse(
+            displayName,
+            (int)selectedPath.SourceMode.Width,
+            (int)selectedPath.SourceMode.Height,
+            selectedPath.RefreshRate.Hertz);
+    }
 }
 
 internal sealed class AgentApiAuthorizationFilter : IEndpointFilter
@@ -359,10 +395,18 @@ public sealed record StatusResponse(
     string Operation,
     string? CurrentStep,
     string? ConfiguredTv,
+    ModeSummaryResponse? ConfiguredCouchMode,
+    ModeSummaryResponse? DesktopSnapshotMode,
     bool TvConnected,
     bool SteamInstalled,
     bool SteamRunning,
     string? LastResult);
+
+public sealed record ModeSummaryResponse(
+    string? DisplayName,
+    int Width,
+    int Height,
+    decimal RefreshRateHz);
 
 public sealed record DisplayResponse(
     string Identifier,

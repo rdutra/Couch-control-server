@@ -103,6 +103,10 @@ public sealed class AgentApplicationContext : ApplicationContext
         diagnosticsForm = new NetworkDiagnosticsForm(diagnosticsService);
         settingsForm = new SettingsForm(
             configurationStore,
+            displayManager,
+            snapshotStore,
+            SaveCurrentDesktopSnapshotAsync,
+            ClearDesktopSnapshotAsync,
             audioDeviceService,
             startupRegistration,
             startupCommandLine,

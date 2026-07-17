@@ -1,6 +1,7 @@
 using System.Linq;
 using CouchControl.Core.Abstractions;
 using CouchControl.Core.Models;
+using CouchControl.Core.Orchestration;
 using CouchControl.Windows.AgentApi;
 using CouchControl.Windows.Startup;
 
@@ -11,18 +12,30 @@ public sealed class SettingsForm : Form
     private const string ApplicationName = "CouchControl.Agent";
 
     private readonly IAgentConfigurationStore configurationStore;
+    private readonly IDisplayManager displayManager;
+    private readonly IDisplaySnapshotStore snapshotStore;
+    private readonly Func<Task> saveSnapshotAsync;
+    private readonly Func<Task> clearSnapshotAsync;
     private readonly IAudioDeviceService audioDeviceService;
     private readonly IStartupRegistration startupRegistration;
     private readonly string startupCommandLine;
     private readonly IApiTokenStore apiTokenStore;
-    private readonly Label configuredTvValue;
-    private readonly Label preferredModeValue;
+    private readonly ComboBox couchDisplayComboBox;
+    private readonly TextBox preferredWidthTextBox;
+    private readonly TextBox preferredHeightTextBox;
+    private readonly TextBox preferredRefreshRateTextBox;
+    private readonly TextBox steamExecutablePathTextBox;
     private readonly TextBox apiPortTextBox;
     private readonly TextBox corsOriginsTextBox;
     private readonly TextBox apiTokenTextBox;
     private readonly ComboBox listeningInterfaceComboBox;
     private readonly ComboBox couchAudioDeviceComboBox;
     private readonly ComboBox desktopAudioDeviceComboBox;
+    private readonly TextBox tvPreparationCommandTextBox;
+    private readonly TextBox tvPreparationDelayTextBox;
+    private readonly TextBox couchAudioCommandTextBox;
+    private readonly TextBox desktopAudioCommandTextBox;
+    private readonly Label snapshotStatusValue;
     private readonly Label firewallRuleStatusValue;
     private readonly CheckBox launchSteamCheckBox;
     private readonly CheckBox automaticRecoveryCheckBox;
@@ -31,6 +44,8 @@ public sealed class SettingsForm : Form
     private readonly Button revokeDeviceButton;
     private readonly Button recreateFirewallRuleButton;
     private readonly Button removeFirewallRuleButton;
+    private readonly Button saveSnapshotButton;
+    private readonly Button clearSnapshotButton;
     private readonly Button saveButton;
     private readonly Button reloadButton;
     private readonly ILocalNetworkInterfaceProvider networkInterfaceProvider;
@@ -40,6 +55,10 @@ public sealed class SettingsForm : Form
 
     public SettingsForm(
         IAgentConfigurationStore configurationStore,
+        IDisplayManager displayManager,
+        IDisplaySnapshotStore snapshotStore,
+        Func<Task> saveSnapshotAsync,
+        Func<Task> clearSnapshotAsync,
         IAudioDeviceService audioDeviceService,
         IStartupRegistration startupRegistration,
         string startupCommandLine,
@@ -48,6 +67,10 @@ public sealed class SettingsForm : Form
         IWindowsFirewallRuleManager firewallRuleManager)
     {
         this.configurationStore = configurationStore;
+        this.displayManager = displayManager;
+        this.snapshotStore = snapshotStore;
+        this.saveSnapshotAsync = saveSnapshotAsync;
+        this.clearSnapshotAsync = clearSnapshotAsync;
         this.audioDeviceService = audioDeviceService;
         this.startupRegistration = startupRegistration;
         this.startupCommandLine = startupCommandLine;
@@ -57,27 +80,64 @@ public sealed class SettingsForm : Form
 
         Text = "Couch Control Settings";
         StartPosition = FormStartPosition.CenterScreen;
-        Size = new Size(820, 680);
-        MinimumSize = new Size(760, 620);
+        Size = new Size(900, 720);
+        MinimumSize = new Size(820, 640);
 
-        var layout = new TableLayoutPanel
+        var rootLayout = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            ColumnCount = 2,
-            Padding = new Padding(16)
+            ColumnCount = 1,
+            RowCount = 2,
+            Padding = new Padding(12)
         };
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 180));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        rootLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        rootLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-        configuredTvValue = AddReadOnlyRow(layout, 0, "Configured TV");
-        preferredModeValue = AddReadOnlyRow(layout, 1, "Preferred mode");
-        apiPortTextBox = AddTextRow(layout, 2, "API port");
-        listeningInterfaceComboBox = AddComboRow(layout, 3, "Listen on");
-        couchAudioDeviceComboBox = AddComboRow(layout, 4, "Couch audio");
-        desktopAudioDeviceComboBox = AddComboRow(layout, 5, "Desktop audio");
-        corsOriginsTextBox = AddTextRow(layout, 6, "CORS origins");
-        apiTokenTextBox = AddTextRow(layout, 7, "API token", isReadOnly: true);
-        firewallRuleStatusValue = AddReadOnlyRow(layout, 8, "Firewall rule");
+        var tabs = new TabControl
+        {
+            Dock = DockStyle.Fill
+        };
+
+        var displayLayout = CreateTabLayout();
+        couchDisplayComboBox = AddComboRow(displayLayout, 0, "Couch TV");
+        (preferredWidthTextBox, preferredHeightTextBox, preferredRefreshRateTextBox) = AddModeRow(displayLayout, 1, "Couch mode");
+        tvPreparationCommandTextBox = AddTextRow(displayLayout, 2, "TV prep command");
+        tvPreparationDelayTextBox = AddTextRow(displayLayout, 3, "TV prep delay ms");
+        snapshotStatusValue = AddReadOnlyRow(displayLayout, 4, "Desktop snapshot");
+        var snapshotButtonPanel = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            Margin = new Padding(0, 8, 0, 0)
+        };
+        saveSnapshotButton = new Button
+        {
+            Text = "Save Current Desktop Snapshot",
+            AutoSize = true
+        };
+        saveSnapshotButton.Click += async (_, _) => await RunSnapshotActionAsync(saveSnapshotButton, saveSnapshotAsync);
+        clearSnapshotButton = new Button
+        {
+            Text = "Clear Saved Snapshot",
+            AutoSize = true
+        };
+        clearSnapshotButton.Click += async (_, _) => await RunSnapshotActionAsync(clearSnapshotButton, clearSnapshotAsync);
+        snapshotButtonPanel.Controls.Add(saveSnapshotButton);
+        snapshotButtonPanel.Controls.Add(clearSnapshotButton);
+        displayLayout.Controls.Add(snapshotButtonPanel, 1, 5);
+        AddHelpText(displayLayout, 6, "The desktop snapshot is used to restore your normal monitor layout when leaving couch mode.");
+        tabs.TabPages.Add(CreateTabPage("Display", displayLayout));
+
+        var audioLayout = CreateTabLayout();
+        couchAudioDeviceComboBox = AddComboRow(audioLayout, 0, "Couch audio");
+        desktopAudioDeviceComboBox = AddComboRow(audioLayout, 1, "Desktop audio");
+        couchAudioCommandTextBox = AddTextRow(audioLayout, 2, "Couch audio cmd");
+        desktopAudioCommandTextBox = AddTextRow(audioLayout, 3, "Desktop audio cmd");
+        AddHelpText(audioLayout, 4, "Audio commands are optional fallbacks. Device selection is preferred when available.");
+        tabs.TabPages.Add(CreateTabPage("Audio", audioLayout));
+
+        var appsLayout = CreateTabLayout();
+        steamExecutablePathTextBox = AddTextRow(appsLayout, 0, "Steam path override");
+        AddHelpText(appsLayout, 1, "Leave this empty to use the detected Steam installation.");
 
         launchSteamCheckBox = new CheckBox
         {
@@ -85,26 +145,15 @@ public sealed class SettingsForm : Form
             AutoSize = true,
             Margin = new Padding(0, 8, 0, 0)
         };
-        layout.Controls.Add(launchSteamCheckBox, 1, 7);
-        layout.SetRow(launchSteamCheckBox, 9);
+        appsLayout.Controls.Add(launchSteamCheckBox, 1, 2);
+        tabs.TabPages.Add(CreateTabPage("Apps", appsLayout));
 
-        automaticRecoveryCheckBox = new CheckBox
-        {
-            Text = "Automatically recover interrupted display operations (future option)",
-            AutoSize = true,
-            Margin = new Padding(0, 8, 0, 0)
-        };
-        layout.Controls.Add(automaticRecoveryCheckBox, 1, 8);
-        layout.SetRow(automaticRecoveryCheckBox, 10);
-
-        startWithWindowsCheckBox = new CheckBox
-        {
-            Text = "Start with Windows",
-            AutoSize = true,
-            Margin = new Padding(0, 8, 0, 0)
-        };
-        layout.Controls.Add(startWithWindowsCheckBox, 1, 9);
-        layout.SetRow(startWithWindowsCheckBox, 11);
+        var networkLayout = CreateTabLayout();
+        apiPortTextBox = AddTextRow(networkLayout, 0, "API port");
+        listeningInterfaceComboBox = AddComboRow(networkLayout, 1, "Listen on");
+        corsOriginsTextBox = AddTextRow(networkLayout, 2, "CORS origins");
+        apiTokenTextBox = AddTextRow(networkLayout, 3, "API token", isReadOnly: true);
+        firewallRuleStatusValue = AddReadOnlyRow(networkLayout, 4, "Firewall rule");
 
         var firewallButtonPanel = new FlowLayoutPanel
         {
@@ -127,23 +176,68 @@ public sealed class SettingsForm : Form
 
         firewallButtonPanel.Controls.Add(recreateFirewallRuleButton);
         firewallButtonPanel.Controls.Add(removeFirewallRuleButton);
-        layout.Controls.Add(firewallButtonPanel, 1, 12);
+        networkLayout.Controls.Add(firewallButtonPanel, 1, 5);
+        AddHelpText(networkLayout, 6, "Restart the agent after changing the API port or listening interface. Firewall changes prompt for elevation only because Windows Defender Firewall is system-wide.");
+        tabs.TabPages.Add(CreateTabPage("Network", networkLayout));
 
-        var helpLabel = new Label
+        var systemLayout = CreateTabLayout();
+
+        automaticRecoveryCheckBox = new CheckBox
         {
-            Text = "TV selection and display mode are still configured through CouchControl.Cli. Audio devices can be selected here. Restart the agent after changing the API port or listening interface. Firewall changes prompt for elevation only because Windows Defender Firewall is system-wide.",
+            Text = "Automatically recover interrupted display operations (future option)",
             AutoSize = true,
-            MaximumSize = new Size(520, 0),
+            Margin = new Padding(0, 8, 0, 0)
+        };
+        systemLayout.Controls.Add(automaticRecoveryCheckBox, 1, 0);
+
+        startWithWindowsCheckBox = new CheckBox
+        {
+            Text = "Start with Windows",
+            AutoSize = true,
+            Margin = new Padding(0, 8, 0, 0)
+        };
+        systemLayout.Controls.Add(startWithWindowsCheckBox, 1, 1);
+
+        var pairedDevicesLabel = new Label
+        {
+            Text = "Paired devices",
+            AutoSize = true,
+            Anchor = AnchorStyles.Left,
+            Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold),
+            Margin = new Padding(0, 20, 0, 4)
+        };
+        systemLayout.Controls.Add(pairedDevicesLabel, 0, 2);
+
+        pairedDevicesListView = new ListView
+        {
+            View = View.Details,
+            FullRowSelect = true,
+            MultiSelect = false,
+            Width = 560,
+            Height = 240
+        };
+        pairedDevicesListView.Columns.Add("Device", 200);
+        pairedDevicesListView.Columns.Add("Paired", 160);
+        pairedDevicesListView.Columns.Add("Last seen", 160);
+        systemLayout.Controls.Add(pairedDevicesListView, 1, 2);
+
+        revokeDeviceButton = new Button
+        {
+            Text = "Revoke Selected Device",
+            AutoSize = true,
             Margin = new Padding(0, 12, 0, 0)
         };
-        layout.Controls.Add(helpLabel, 1, 13);
+        revokeDeviceButton.Click += async (_, _) => await RevokeSelectedDeviceAsync();
+        pairedDevicesListView.SelectedIndexChanged += (_, _) => revokeDeviceButton.Enabled = pairedDevicesListView.SelectedItems.Count > 0 && !isBusy;
+        systemLayout.Controls.Add(revokeDeviceButton, 1, 3);
+        tabs.TabPages.Add(CreateTabPage("System", systemLayout));
 
-        var buttonPanel = new FlowLayoutPanel
+        var bottomButtonPanel = new FlowLayoutPanel
         {
             FlowDirection = FlowDirection.RightToLeft,
             Dock = DockStyle.Fill,
             AutoSize = true,
-            Margin = new Padding(0, 16, 0, 0)
+            Margin = new Padding(0, 12, 0, 0)
         };
 
         saveButton = new Button
@@ -160,44 +254,12 @@ public sealed class SettingsForm : Form
         };
         reloadButton.Click += async (_, _) => await LoadCurrentValuesAsync();
 
-        buttonPanel.Controls.Add(saveButton);
-        buttonPanel.Controls.Add(reloadButton);
-        layout.Controls.Add(buttonPanel, 1, 14);
+        bottomButtonPanel.Controls.Add(saveButton);
+        bottomButtonPanel.Controls.Add(reloadButton);
 
-        var pairedDevicesLabel = new Label
-        {
-            Text = "Paired devices",
-            AutoSize = true,
-            Anchor = AnchorStyles.Left,
-            Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold),
-            Margin = new Padding(0, 20, 0, 4)
-        };
-        layout.Controls.Add(pairedDevicesLabel, 0, 15);
-
-        pairedDevicesListView = new ListView
-        {
-            View = View.Details,
-            FullRowSelect = true,
-            MultiSelect = false,
-            Width = 500,
-            Height = 160
-        };
-        pairedDevicesListView.Columns.Add("Device", 180);
-        pairedDevicesListView.Columns.Add("Paired", 140);
-        pairedDevicesListView.Columns.Add("Last seen", 140);
-        layout.Controls.Add(pairedDevicesListView, 1, 15);
-
-        revokeDeviceButton = new Button
-        {
-            Text = "Revoke Selected Device",
-            AutoSize = true,
-            Margin = new Padding(0, 12, 0, 0)
-        };
-        revokeDeviceButton.Click += async (_, _) => await RevokeSelectedDeviceAsync();
-        pairedDevicesListView.SelectedIndexChanged += (_, _) => revokeDeviceButton.Enabled = pairedDevicesListView.SelectedItems.Count > 0 && !isBusy;
-        layout.Controls.Add(revokeDeviceButton, 1, 16);
-
-        Controls.Add(layout);
+        rootLayout.Controls.Add(tabs, 0, 0);
+        rootLayout.Controls.Add(bottomButtonPanel, 0, 1);
+        Controls.Add(rootLayout);
 
         Shown += async (_, _) => await LoadCurrentValuesAsync();
         FormClosing += OnFormClosing;
@@ -213,13 +275,19 @@ public sealed class SettingsForm : Form
         await RunBusyAsync(async () =>
         {
             var configuration = await configurationStore.LoadAsync();
-            configuredTvValue.Text = configuration.CouchDisplayIdentity is not null
-                ? $"{configuration.CouchDisplayIdentity.FriendlyName} ({configuration.CouchDisplayIdentity.StableId})"
-                : configuration.CouchDisplayIdentifier?.Value ?? "Not configured";
-            preferredModeValue.Text = $"{configuration.PreferredCouchWidth}x{configuration.PreferredCouchHeight} @ {configuration.PreferredCouchRefreshRateHz} Hz";
+            await LoadDisplayOptionsAsync(configuration);
+            preferredWidthTextBox.Text = configuration.PreferredCouchWidth.ToString();
+            preferredHeightTextBox.Text = configuration.PreferredCouchHeight.ToString();
+            preferredRefreshRateTextBox.Text = configuration.PreferredCouchRefreshRateHz.ToString("0.##");
+            steamExecutablePathTextBox.Text = configuration.SteamExecutablePath ?? string.Empty;
             apiPortTextBox.Text = configuration.ApiPort.ToString();
             LoadListeningInterfaceOptions(configuration.ApiListeningInterfaceId);
             await LoadAudioDeviceOptionsAsync(configuration.CouchAudioDeviceId, configuration.DesktopAudioDeviceId);
+            tvPreparationCommandTextBox.Text = configuration.TvPreparationCommand ?? string.Empty;
+            tvPreparationDelayTextBox.Text = configuration.TvPreparationDelayMs.ToString();
+            couchAudioCommandTextBox.Text = configuration.CouchAudioCommand ?? string.Empty;
+            desktopAudioCommandTextBox.Text = configuration.DesktopAudioCommand ?? string.Empty;
+            await LoadSnapshotStatusAsync();
             corsOriginsTextBox.Text = string.Join(", ", configuration.CorsAllowedOrigins);
             apiTokenTextBox.Text = await apiTokenStore.GetTokenAsync();
             firewallRuleStatusValue.Text = firewallRuleManager.GetStatus(configuration.ApiPort).StatusText;
@@ -240,10 +308,21 @@ public sealed class SettingsForm : Form
         await RunBusyAsync(async () =>
         {
             var configuration = await configurationStore.LoadAsync();
+            var selectedDisplay = ParseSelectedDisplay(couchDisplayComboBox);
             var updatedConfiguration = configuration with
             {
+                CouchDisplayIdentifier = selectedDisplay is null ? null : new DisplayIdentifier(selectedDisplay.DevicePath!),
+                CouchDisplayIdentity = selectedDisplay?.Identity,
+                PreferredCouchWidth = ParsePositiveInt(preferredWidthTextBox, configuration.PreferredCouchWidth),
+                PreferredCouchHeight = ParsePositiveInt(preferredHeightTextBox, configuration.PreferredCouchHeight),
+                PreferredCouchRefreshRateHz = ParsePositiveDecimal(preferredRefreshRateTextBox, configuration.PreferredCouchRefreshRateHz),
                 LaunchSteamAutomatically = launchSteamCheckBox.Checked,
                 AutomaticallyRecoverInterruptedDisplayOperations = automaticRecoveryCheckBox.Checked,
+                SteamExecutablePath = ParseOptionalText(steamExecutablePathTextBox),
+                TvPreparationCommand = ParseOptionalText(tvPreparationCommandTextBox),
+                TvPreparationDelayMs = ParseNonNegativeInt(tvPreparationDelayTextBox, configuration.TvPreparationDelayMs),
+                CouchAudioCommand = ParseOptionalText(couchAudioCommandTextBox),
+                DesktopAudioCommand = ParseOptionalText(desktopAudioCommandTextBox),
                 ApiPort = ParseApiPort(),
                 ApiListeningInterfaceId = ParseListeningInterfaceId(),
                 CouchAudioDeviceId = ParseSelectedAudioDeviceId(couchAudioDeviceComboBox),
@@ -263,6 +342,11 @@ public sealed class SettingsForm : Form
         isBusy = true;
         saveButton.Enabled = false;
         reloadButton.Enabled = false;
+        couchDisplayComboBox.Enabled = false;
+        preferredWidthTextBox.Enabled = false;
+        preferredHeightTextBox.Enabled = false;
+        preferredRefreshRateTextBox.Enabled = false;
+        steamExecutablePathTextBox.Enabled = false;
         launchSteamCheckBox.Enabled = false;
         automaticRecoveryCheckBox.Enabled = false;
         startWithWindowsCheckBox.Enabled = false;
@@ -270,11 +354,17 @@ public sealed class SettingsForm : Form
         listeningInterfaceComboBox.Enabled = false;
         couchAudioDeviceComboBox.Enabled = false;
         desktopAudioDeviceComboBox.Enabled = false;
+        tvPreparationCommandTextBox.Enabled = false;
+        tvPreparationDelayTextBox.Enabled = false;
+        couchAudioCommandTextBox.Enabled = false;
+        desktopAudioCommandTextBox.Enabled = false;
         corsOriginsTextBox.Enabled = false;
         pairedDevicesListView.Enabled = false;
         revokeDeviceButton.Enabled = false;
         recreateFirewallRuleButton.Enabled = false;
         removeFirewallRuleButton.Enabled = false;
+        saveSnapshotButton.Enabled = false;
+        clearSnapshotButton.Enabled = false;
 
         try
         {
@@ -285,6 +375,11 @@ public sealed class SettingsForm : Form
             isBusy = false;
             saveButton.Enabled = true;
             reloadButton.Enabled = true;
+            couchDisplayComboBox.Enabled = true;
+            preferredWidthTextBox.Enabled = true;
+            preferredHeightTextBox.Enabled = true;
+            preferredRefreshRateTextBox.Enabled = true;
+            steamExecutablePathTextBox.Enabled = true;
             launchSteamCheckBox.Enabled = true;
             automaticRecoveryCheckBox.Enabled = true;
             startWithWindowsCheckBox.Enabled = true;
@@ -292,11 +387,51 @@ public sealed class SettingsForm : Form
             listeningInterfaceComboBox.Enabled = true;
             couchAudioDeviceComboBox.Enabled = true;
             desktopAudioDeviceComboBox.Enabled = true;
+            tvPreparationCommandTextBox.Enabled = true;
+            tvPreparationDelayTextBox.Enabled = true;
+            couchAudioCommandTextBox.Enabled = true;
+            desktopAudioCommandTextBox.Enabled = true;
             corsOriginsTextBox.Enabled = true;
             pairedDevicesListView.Enabled = true;
             revokeDeviceButton.Enabled = pairedDevicesListView.SelectedItems.Count > 0;
             recreateFirewallRuleButton.Enabled = true;
             removeFirewallRuleButton.Enabled = true;
+            saveSnapshotButton.Enabled = true;
+            clearSnapshotButton.Enabled = true;
+        }
+    }
+
+    private async Task RunSnapshotActionAsync(Button button, Func<Task> action)
+    {
+        if (isBusy || !button.Enabled)
+        {
+            return;
+        }
+
+        button.Enabled = false;
+        try
+        {
+            await action();
+            await LoadSnapshotStatusAsync();
+        }
+        finally
+        {
+            button.Enabled = true;
+        }
+    }
+
+    private async Task LoadSnapshotStatusAsync()
+    {
+        try
+        {
+            var snapshot = await snapshotStore.LoadLastDesktopSnapshotAsync();
+            snapshotStatusValue.Text = snapshot is null
+                ? "Not saved"
+                : $"Saved {snapshot.CapturedAtUtc.LocalDateTime:g} ({snapshot.Paths.Count(static path => path.IsActive)} active display path(s))";
+        }
+        catch (Exception ex)
+        {
+            snapshotStatusValue.Text = $"Unavailable: {ex.Message}";
         }
     }
 
@@ -364,6 +499,43 @@ public sealed class SettingsForm : Form
         return valueLabel;
     }
 
+    private static TableLayoutPanel CreateTabLayout()
+    {
+        var layout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            Padding = new Padding(16),
+            AutoScroll = true
+        };
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 180));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        return layout;
+    }
+
+    private static TabPage CreateTabPage(string title, Control content)
+    {
+        var page = new TabPage(title)
+        {
+            Padding = new Padding(0)
+        };
+        page.Controls.Add(content);
+        return page;
+    }
+
+    private static void AddHelpText(TableLayoutPanel layout, int rowIndex, string text)
+    {
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        var label = new Label
+        {
+            Text = text,
+            AutoSize = true,
+            MaximumSize = new Size(560, 0),
+            Margin = new Padding(0, 8, 0, 0)
+        };
+        layout.Controls.Add(label, 1, rowIndex);
+    }
+
     private static TextBox AddTextRow(TableLayoutPanel layout, int rowIndex, string title, bool isReadOnly = false)
     {
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -410,8 +582,62 @@ public sealed class SettingsForm : Form
         return comboBox;
     }
 
+    private static (TextBox Width, TextBox Height, TextBox RefreshRate) AddModeRow(TableLayoutPanel layout, int rowIndex, string title)
+    {
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var titleLabel = new Label
+        {
+            Text = title,
+            AutoSize = true,
+            Anchor = AnchorStyles.Left,
+            Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold)
+        };
+
+        var panel = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            WrapContents = false,
+            Margin = Padding.Empty
+        };
+
+        var widthTextBox = CreateModeTextBox();
+        var heightTextBox = CreateModeTextBox();
+        var refreshRateTextBox = CreateModeTextBox();
+
+        panel.Controls.Add(widthTextBox);
+        panel.Controls.Add(new Label { Text = "x", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(4, 4, 4, 0) });
+        panel.Controls.Add(heightTextBox);
+        panel.Controls.Add(new Label { Text = "@", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(8, 4, 4, 0) });
+        panel.Controls.Add(refreshRateTextBox);
+        panel.Controls.Add(new Label { Text = "Hz", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(4, 4, 0, 0) });
+
+        layout.Controls.Add(titleLabel, 0, rowIndex);
+        layout.Controls.Add(panel, 1, rowIndex);
+
+        return (widthTextBox, heightTextBox, refreshRateTextBox);
+    }
+
+    private static TextBox CreateModeTextBox() =>
+        new()
+        {
+            Width = 80
+        };
+
     private int ParseApiPort() =>
         int.TryParse(apiPortTextBox.Text, out var port) ? port : 47981;
+
+    private static int ParsePositiveInt(TextBox textBox, int fallback) =>
+        int.TryParse(textBox.Text, out var value) && value > 0 ? value : fallback;
+
+    private static int ParseNonNegativeInt(TextBox textBox, int fallback) =>
+        int.TryParse(textBox.Text, out var value) && value >= 0 ? value : fallback;
+
+    private static decimal ParsePositiveDecimal(TextBox textBox, decimal fallback) =>
+        decimal.TryParse(textBox.Text, out var value) && value > 0 ? value : fallback;
+
+    private static string? ParseOptionalText(TextBox textBox) =>
+        string.IsNullOrWhiteSpace(textBox.Text) ? null : textBox.Text.Trim();
 
     private string? ParseListeningInterfaceId()
     {
@@ -439,6 +665,85 @@ public sealed class SettingsForm : Form
         comboBox.SelectedItem is AudioDeviceItem item && !string.IsNullOrWhiteSpace(item.Id)
             ? item.FriendlyName
             : null;
+
+    private static DisplayItem? ParseSelectedDisplay(ComboBox comboBox) =>
+        comboBox.SelectedItem is DisplayItem item && !string.IsNullOrWhiteSpace(item.DevicePath)
+            ? item
+            : null;
+
+    private async Task LoadDisplayOptionsAsync(AgentConfiguration configuration)
+    {
+        couchDisplayComboBox.Items.Clear();
+
+        var items = new List<DisplayItem>
+        {
+            new(null, null, "Not configured")
+        };
+
+        try
+        {
+            var displays = await displayManager.GetDisplaysAsync();
+            items.AddRange(displays
+                .Where(static display => !string.IsNullOrWhiteSpace(display.DevicePath))
+                .OrderByDescending(static display => display.IsPrimary)
+                .ThenBy(static display => display.FriendlyName, StringComparer.OrdinalIgnoreCase)
+                .Select(static display =>
+                {
+                    var stableId = DisplayStableId.FromDevicePath(display.DevicePath);
+                    var parsed = DisplayMatchingService.ParseDevicePath(display.DevicePath);
+                    var identity = new CouchDisplayIdentity(
+                        DevicePath: display.DevicePath ?? string.Empty,
+                        FriendlyName: display.FriendlyName,
+                        Manufacturer: parsed?.Manufacturer ?? string.Empty,
+                        ProductCode: parsed?.ProductCode ?? string.Empty,
+                        SerialOrInstance: parsed?.SerialOrInstance ?? string.Empty,
+                        AdapterLuid: display.AdapterLuid ?? string.Empty,
+                        TargetId: display.TargetId ?? 0)
+                    {
+                        StableId = stableId
+                    };
+
+                    var mode = display.CurrentMode is null
+                        ? "mode unknown"
+                        : $"{display.CurrentMode.Width}x{display.CurrentMode.Height} @ {display.CurrentMode.RefreshRateHz:0.##} Hz";
+                    var status = display.IsPrimary ? "Primary" : display.IsActive ? "Active" : "Inactive";
+
+                    return new DisplayItem(
+                        display.DevicePath,
+                        identity,
+                        $"{display.FriendlyName} ({stableId}) - {status}, {mode}");
+                }));
+        }
+        catch
+        {
+            items.Add(new DisplayItem(null, null, "Displays unavailable"));
+        }
+
+        if (configuration.CouchDisplayIdentity is not null &&
+            !items.Any(item => string.Equals(item.DevicePath, configuration.CouchDisplayIdentity.DevicePath, StringComparison.OrdinalIgnoreCase)))
+        {
+            items.Add(new DisplayItem(
+                configuration.CouchDisplayIdentity.DevicePath,
+                configuration.CouchDisplayIdentity,
+                $"{configuration.CouchDisplayIdentity.FriendlyName} ({configuration.CouchDisplayIdentity.StableId}) - saved"));
+        }
+        else if (configuration.CouchDisplayIdentifier is not null &&
+            !items.Any(item => string.Equals(item.DevicePath, configuration.CouchDisplayIdentifier.Value, StringComparison.OrdinalIgnoreCase)))
+        {
+            items.Add(new DisplayItem(
+                configuration.CouchDisplayIdentifier.Value,
+                null,
+                $"{configuration.CouchDisplayIdentifier.Value} - saved"));
+        }
+
+        couchDisplayComboBox.Items.AddRange(items.Cast<object>().ToArray());
+        couchDisplayComboBox.SelectedItem = items.FirstOrDefault(item =>
+                configuration.CouchDisplayIdentity is not null
+                    ? string.Equals(item.DevicePath, configuration.CouchDisplayIdentity.DevicePath, StringComparison.OrdinalIgnoreCase)
+                    : configuration.CouchDisplayIdentifier is not null &&
+                      string.Equals(item.DevicePath, configuration.CouchDisplayIdentifier.Value, StringComparison.OrdinalIgnoreCase))
+            ?? items[0];
+    }
 
     private void LoadListeningInterfaceOptions(string? selectedInterfaceId)
     {
@@ -583,6 +888,11 @@ public sealed class SettingsForm : Form
     }
 
     private sealed record ListeningInterfaceItem(string Id, string Label)
+    {
+        public override string ToString() => Label;
+    }
+
+    private sealed record DisplayItem(string? DevicePath, CouchDisplayIdentity? Identity, string Label)
     {
         public override string ToString() => Label;
     }
