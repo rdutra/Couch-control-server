@@ -40,7 +40,7 @@ public sealed class StatusForm : Form
         {
             Dock = DockStyle.Top,
             ColumnCount = 2,
-            RowCount = 8,
+            RowCount = 9,
             AutoSize = true
         };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 180));
@@ -52,8 +52,9 @@ public sealed class StatusForm : Form
         AddRow(layout, 3, "Configured TV");
         AddRow(layout, 4, "TV connected");
         AddRow(layout, 5, "Listening LAN");
-        AddRow(layout, 6, "Steam");
-        AddRow(layout, 7, "Last result");
+        AddRow(layout, 6, "MAC address");
+        AddRow(layout, 7, "Steam");
+        AddRow(layout, 8, "Last result");
 
         var buttonPanel = new FlowLayoutPanel
         {
@@ -114,6 +115,7 @@ public sealed class StatusForm : Form
             valueLabels["Configured TV"].Text = snapshot.ConfiguredTv;
             valueLabels["TV connected"].Text = snapshot.TvConnectionStatus;
             valueLabels["Listening LAN"].Text = snapshot.ListeningAddresses;
+            valueLabels["MAC address"].Text = snapshot.MacAddress;
             valueLabels["Steam"].Text = snapshot.SteamStatus;
             valueLabels["Last result"].Text = snapshot.LastResult;
         }

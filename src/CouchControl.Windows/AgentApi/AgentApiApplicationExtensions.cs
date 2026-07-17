@@ -73,12 +73,14 @@ public static class AgentApiApplicationExtensions
         IDisplayManager displayManager,
         IProfileOrchestrator orchestrator,
         ISteamLauncher steamLauncher,
+        ILocalNetworkInterfaceProvider networkInterfaceProvider,
         CancellationToken cancellationToken)
     {
         var configuration = await configurationStore.LoadAsync(cancellationToken);
         var snapshot = await snapshotStore.LoadLastDesktopSnapshotAsync(cancellationToken);
         var displays = await displayManager.GetDisplaysAsync(cancellationToken);
         var status = orchestrator.GetStatus();
+        var bindingPlan = networkInterfaceProvider.CreateBindingPlan(configuration);
 
         bool tvConnected = configuration.CouchDisplayIdentifier is not null &&
             displays.Any(display => display.Identifier.Matches(configuration.CouchDisplayIdentifier));
@@ -97,6 +99,9 @@ public static class AgentApiApplicationExtensions
             tvConnected,
             steamLauncher.IsInstalled(configuration),
             steamLauncher.IsRunning(),
+            bindingPlan.ListenUrls.FirstOrDefault(),
+            bindingPlan.LanIpv4Addresses,
+            bindingPlan.MacAddress,
             status.LastOperationResult?.Message));
     }
 
@@ -123,6 +128,7 @@ public static class AgentApiApplicationExtensions
         PairRequest request,
         IPairingService pairingService,
         IAgentConfigurationStore configurationStore,
+        ILocalNetworkInterfaceProvider networkInterfaceProvider,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(request.DeviceName) || string.IsNullOrWhiteSpace(request.PairingCode))
@@ -139,10 +145,14 @@ public static class AgentApiApplicationExtensions
         }
 
         var configuration = await configurationStore.LoadAsync(cancellationToken);
+        var bindingPlan = networkInterfaceProvider.CreateBindingPlan(configuration);
         return Results.Ok(new PairResponse(
             result.Token.Token,
             configuration.AgentName,
-            "v1"));
+            "v1",
+            bindingPlan.ListenUrls.FirstOrDefault(),
+            bindingPlan.LanIpv4Addresses,
+            bindingPlan.MacAddress));
     }
 
     private static IResult StartCouchModeAsync(IAgentApiOperationService operationService)
@@ -384,7 +394,13 @@ public sealed record ErrorResponse(string Message);
 
 public sealed record PairRequest(string PairingCode, string DeviceName);
 
-public sealed record PairResponse(string Token, string AgentName, string ApiVersion);
+public sealed record PairResponse(
+    string Token,
+    string AgentName,
+    string ApiVersion,
+    string? AgentBaseUrl,
+    IReadOnlyList<string> LanIpv4Addresses,
+    string? MacAddress);
 
 public sealed record OperationAcceptedResponse(bool Accepted, Guid OperationId);
 
@@ -400,6 +416,9 @@ public sealed record StatusResponse(
     bool TvConnected,
     bool SteamInstalled,
     bool SteamRunning,
+    string? AgentBaseUrl,
+    IReadOnlyList<string> LanIpv4Addresses,
+    string? MacAddress,
     string? LastResult);
 
 public sealed record ModeSummaryResponse(

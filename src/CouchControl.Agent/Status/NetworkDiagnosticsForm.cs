@@ -32,7 +32,7 @@ public sealed class NetworkDiagnosticsForm : Form
         {
             Dock = DockStyle.Top,
             ColumnCount = 2,
-            RowCount = 7,
+            RowCount = 8,
             AutoSize = true
         };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 190));
@@ -42,9 +42,10 @@ public sealed class NetworkDiagnosticsForm : Form
         AddRow(layout, 1, "Agent port");
         AddRow(layout, 2, "Listening interface");
         AddRow(layout, 3, "LAN IPv4 addresses");
-        AddRow(layout, 4, "Firewall rule");
-        AddRow(layout, 5, "API health");
-        AddRow(layout, 6, "Windows network");
+        AddRow(layout, 4, "MAC address");
+        AddRow(layout, 5, "Firewall rule");
+        AddRow(layout, 6, "API health");
+        AddRow(layout, 7, "Windows network");
 
         var buttonPanel = new FlowLayoutPanel
         {
@@ -88,6 +89,7 @@ public sealed class NetworkDiagnosticsForm : Form
             valueLabels["LAN IPv4 addresses"].Text = snapshot.LanIpv4Addresses.Count == 0
                 ? "None"
                 : string.Join(", ", snapshot.LanIpv4Addresses);
+            valueLabels["MAC address"].Text = snapshot.MacAddress ?? "Unavailable";
             valueLabels["Firewall rule"].Text = snapshot.FirewallRuleStatus;
             valueLabels["API health"].Text = snapshot.ApiHealthStatus;
             valueLabels["Windows network"].Text = snapshot.NetworkProfileStatus;

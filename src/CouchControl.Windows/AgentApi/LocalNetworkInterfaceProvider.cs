@@ -80,6 +80,7 @@ public sealed class LocalNetworkInterfaceProvider : ILocalNetworkInterfaceProvid
                 requestedId,
                 string.Empty,
                 "No eligible LAN interface",
+                null,
                 Array.Empty<string>(),
                 Array.Empty<string>(),
                 false,
@@ -95,6 +96,7 @@ public sealed class LocalNetworkInterfaceProvider : ILocalNetworkInterfaceProvid
             requestedId,
             selected.Id,
             selected.Name,
+            selected.MacAddress,
             urls,
             selected.LanIpv4Addresses,
             selected.IsPrivateProfile,
@@ -162,6 +164,7 @@ public sealed class LocalNetworkInterfaceProvider : ILocalNetworkInterfaceProvid
             adapter.Id,
             string.IsNullOrWhiteSpace(adapter.Name) ? adapter.Description : adapter.Name,
             adapter.Description,
+            FormatMacAddress(adapter.PhysicalAddress),
             adapter.Type,
             adapter.InterfaceIndex,
             adapter.IsUp,
@@ -220,6 +223,19 @@ public sealed class LocalNetworkInterfaceProvider : ILocalNetworkInterfaceProvid
 
         return "Unknown";
     }
+
+    private static string? FormatMacAddress(PhysicalAddress? physicalAddress)
+    {
+        if (physicalAddress is null)
+        {
+            return null;
+        }
+
+        var bytes = physicalAddress.GetAddressBytes();
+        return bytes.Length == 0
+            ? null
+            : string.Join(":", bytes.Select(static value => value.ToString("X2")));
+    }
 }
 
 internal interface INetworkInterfaceSystem
@@ -260,6 +276,7 @@ internal sealed class NetworkInterfaceSystem : INetworkInterfaceSystem
                     adapter.Id,
                     adapter.Name,
                     adapter.Description,
+                    adapter.GetPhysicalAddress(),
                     adapter.NetworkInterfaceType,
                     adapter.OperationalStatus == OperationalStatus.Up,
                     ipv4?.Index,
@@ -274,6 +291,7 @@ internal sealed record NetworkAdapterSnapshot(
     string Id,
     string Name,
     string Description,
+    PhysicalAddress? PhysicalAddress,
     NetworkInterfaceType Type,
     bool IsUp,
     int? InterfaceIndex,

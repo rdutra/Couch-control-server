@@ -1,24 +1,34 @@
 using CouchControl.Windows.AgentApi;
+using CouchControl.Core.Abstractions;
 
 namespace CouchControl.Agent.Settings;
 
 public sealed class PairingCodeForm : Form
 {
     private readonly IPairingService pairingService;
+    private readonly IAgentConfigurationStore configurationStore;
+    private readonly ILocalNetworkInterfaceProvider networkInterfaceProvider;
     private readonly Label codeValueLabel;
+    private readonly Label computerAddressValueLabel;
+    private readonly Label macAddressValueLabel;
     private readonly Label expiresValueLabel;
     private readonly Label statusLabel;
     private readonly Button closePairingButton;
     private readonly Button refreshButton;
 
-    public PairingCodeForm(IPairingService pairingService)
+    public PairingCodeForm(
+        IPairingService pairingService,
+        IAgentConfigurationStore configurationStore,
+        ILocalNetworkInterfaceProvider networkInterfaceProvider)
     {
         this.pairingService = pairingService;
+        this.configurationStore = configurationStore;
+        this.networkInterfaceProvider = networkInterfaceProvider;
 
         Text = "Device Pairing";
         StartPosition = FormStartPosition.CenterScreen;
-        Size = new Size(360, 220);
-        MinimumSize = new Size(320, 200);
+        Size = new Size(460, 300);
+        MinimumSize = new Size(420, 280);
 
         var layout = new TableLayoutPanel
         {
@@ -34,18 +44,26 @@ public sealed class PairingCodeForm : Form
         codeValueLabel.Font = new Font(Font.FontFamily, 22, FontStyle.Bold);
         layout.Controls.Add(codeValueLabel, 1, 0);
 
-        layout.Controls.Add(CreateTitleLabel("Expires"), 0, 1);
+        layout.Controls.Add(CreateTitleLabel("Computer Address"), 0, 1);
+        computerAddressValueLabel = CreateValueLabel("-");
+        layout.Controls.Add(computerAddressValueLabel, 1, 1);
+
+        layout.Controls.Add(CreateTitleLabel("MAC Address"), 0, 2);
+        macAddressValueLabel = CreateValueLabel("-");
+        layout.Controls.Add(macAddressValueLabel, 1, 2);
+
+        layout.Controls.Add(CreateTitleLabel("Expires"), 0, 3);
         expiresValueLabel = CreateValueLabel("-");
-        layout.Controls.Add(expiresValueLabel, 1, 1);
+        layout.Controls.Add(expiresValueLabel, 1, 3);
 
         statusLabel = new Label
         {
             AutoSize = true,
-            MaximumSize = new Size(260, 0),
+            MaximumSize = new Size(300, 0),
             Margin = new Padding(0, 12, 0, 0),
-            Text = "Pairing is active for one device."
+            Text = "Enter the computer address in the mobile app, then enter this pairing code."
         };
-        layout.Controls.Add(statusLabel, 1, 2);
+        layout.Controls.Add(statusLabel, 1, 4);
 
         closePairingButton = new Button
         {
@@ -58,7 +76,7 @@ public sealed class PairingCodeForm : Form
             await pairingService.DisableAsync();
             await RefreshSessionAsync();
         };
-        layout.Controls.Add(closePairingButton, 1, 3);
+        layout.Controls.Add(closePairingButton, 1, 5);
 
         refreshButton = new Button
         {
@@ -67,7 +85,7 @@ public sealed class PairingCodeForm : Form
             Margin = new Padding(8, 16, 0, 0)
         };
         refreshButton.Click += async (_, _) => await RefreshSessionAsync();
-        layout.Controls.Add(refreshButton, 1, 4);
+        layout.Controls.Add(refreshButton, 1, 6);
 
         Controls.Add(layout);
 
@@ -80,7 +98,7 @@ public sealed class PairingCodeForm : Form
 
     public async Task ShowSessionAsync(PairingSession session)
     {
-        UpdateUi(session);
+        await UpdateUiAsync(session);
         Show();
         BringToFront();
         await RefreshSessionAsync();
@@ -97,23 +115,34 @@ public sealed class PairingCodeForm : Form
         if (session is null)
         {
             codeValueLabel.Text = "Closed";
+            await RefreshNetworkDetailsAsync();
             expiresValueLabel.Text = "-";
             statusLabel.Text = "Pairing is inactive. Start a new session from the tray menu.";
             closePairingButton.Enabled = false;
             return;
         }
 
-        UpdateUi(session);
+        await UpdateUiAsync(session);
     }
 
-    private void UpdateUi(PairingSession session)
+    private async Task UpdateUiAsync(PairingSession session)
     {
         codeValueLabel.Text = session.PairingCode;
+        await RefreshNetworkDetailsAsync();
         expiresValueLabel.Text = $"{Math.Max(0, (int)Math.Ceiling((session.ExpiresAtUtc - DateTimeOffset.UtcNow).TotalSeconds))} seconds";
         statusLabel.Text = session.FailedAttempts > 0
             ? $"Failed attempts: {session.FailedAttempts}. Remaining: {session.RemainingAttempts}."
-            : "Pairing is active for one device.";
+            : "Enter the computer address in the mobile app, then enter this pairing code.";
         closePairingButton.Enabled = true;
+    }
+
+    private async Task RefreshNetworkDetailsAsync()
+    {
+        var configuration = await configurationStore.LoadAsync();
+        var bindingPlan = networkInterfaceProvider.CreateBindingPlan(configuration);
+        computerAddressValueLabel.Text = bindingPlan.ListenUrls.FirstOrDefault() ??
+            (bindingPlan.LanIpv4Addresses.Count == 0 ? "No LAN address available" : bindingPlan.LanIpv4Addresses[0]);
+        macAddressValueLabel.Text = bindingPlan.MacAddress ?? "Unavailable";
     }
 
     private static Label CreateTitleLabel(string text) =>
@@ -129,7 +158,7 @@ public sealed class PairingCodeForm : Form
         {
             Text = text,
             AutoSize = true,
-            MaximumSize = new Size(220, 0)
+            MaximumSize = new Size(300, 0)
         };
 
     private void OnFormClosing(object? sender, FormClosingEventArgs e)

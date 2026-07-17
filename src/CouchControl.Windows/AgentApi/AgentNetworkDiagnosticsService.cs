@@ -40,6 +40,7 @@ public sealed class AgentNetworkDiagnosticsService : IAgentNetworkDiagnosticsSer
             configuration.ApiPort,
             string.IsNullOrWhiteSpace(bindingPlan.SelectedInterfaceName) ? bindingPlan.StatusMessage : bindingPlan.SelectedInterfaceName,
             bindingPlan.LanIpv4Addresses,
+            bindingPlan.MacAddress,
             firewallStatus.StatusText,
             health.StatusText,
             profileStatus);

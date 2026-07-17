@@ -16,6 +16,7 @@ public sealed class AgentNetworkTests
                     "ethernet",
                     "Ethernet",
                     "Intel Ethernet Adapter",
+                    PhysicalAddress.Parse("001122334455"),
                     NetworkInterfaceType.Ethernet,
                     true,
                     7,
@@ -24,6 +25,7 @@ public sealed class AgentNetworkTests
                     "vpn",
                     "Tailscale",
                     "Tailscale Tunnel",
+                    PhysicalAddress.Parse("001122334466"),
                     NetworkInterfaceType.Tunnel,
                     true,
                     9,
@@ -32,6 +34,7 @@ public sealed class AgentNetworkTests
                     "virtual",
                     "vEthernet",
                     "Hyper-V Virtual Ethernet Adapter",
+                    PhysicalAddress.Parse("001122334477"),
                     NetworkInterfaceType.Ethernet,
                     true,
                     12,
@@ -40,6 +43,7 @@ public sealed class AgentNetworkTests
                     "wifi-public",
                     "Wi-Fi",
                     "Intel Wireless",
+                    PhysicalAddress.Parse("001122334488"),
                     NetworkInterfaceType.Wireless80211,
                     true,
                     8,
@@ -57,6 +61,7 @@ public sealed class AgentNetworkTests
         Assert.Equal("ethernet", plan.SelectedInterfaceId);
         Assert.Equal(["192.168.1.40"], plan.LanIpv4Addresses);
         Assert.Equal(["http://192.168.1.40:47981"], plan.ListenUrls);
+        Assert.Equal("00:11:22:33:44:55", plan.MacAddress);
     }
 
     [Fact]
@@ -68,6 +73,7 @@ public sealed class AgentNetworkTests
                     "ethernet",
                     "Ethernet",
                     "Intel Ethernet Adapter",
+                    PhysicalAddress.Parse("001122334455"),
                     NetworkInterfaceType.Ethernet,
                     true,
                     7,
@@ -76,6 +82,7 @@ public sealed class AgentNetworkTests
                     "wifi",
                     "Wi-Fi",
                     "Intel Wireless",
+                    PhysicalAddress.Parse("AABBCCDDEEFF"),
                     NetworkInterfaceType.Wireless80211,
                     true,
                     8,
@@ -94,6 +101,7 @@ public sealed class AgentNetworkTests
 
         Assert.Equal("wifi", plan.SelectedInterfaceId);
         Assert.Equal(["192.168.0.25"], plan.LanIpv4Addresses);
+        Assert.Equal("AA:BB:CC:DD:EE:FF", plan.MacAddress);
     }
 
     [Fact]

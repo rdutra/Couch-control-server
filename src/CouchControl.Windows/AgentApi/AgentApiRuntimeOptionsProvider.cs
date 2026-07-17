@@ -21,7 +21,7 @@ public sealed class AgentApiRuntimeOptionsProvider
     public string ListeningInterfaceId { get; private set; } = AgentApiListeningInterface.Automatic;
 
     public AgentApiBindingPlan BindingPlan { get; private set; } =
-        new(47981, AgentApiListeningInterface.Automatic, string.Empty, string.Empty, Array.Empty<string>(), Array.Empty<string>(), false, "Not loaded.");
+        new(47981, AgentApiListeningInterface.Automatic, string.Empty, string.Empty, null, Array.Empty<string>(), Array.Empty<string>(), false, "Not loaded.");
 
     public IReadOnlyList<string> AllowedOrigins { get; private set; } = Array.Empty<string>();
 

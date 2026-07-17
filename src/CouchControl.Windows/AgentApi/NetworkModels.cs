@@ -11,6 +11,7 @@ public sealed record AgentNetworkInterface(
     string Id,
     string Name,
     string Description,
+    string? MacAddress,
     NetworkInterfaceType Type,
     int? InterfaceIndex,
     bool IsUp,
@@ -27,6 +28,7 @@ public sealed record AgentApiBindingPlan(
     string RequestedInterfaceId,
     string SelectedInterfaceId,
     string SelectedInterfaceName,
+    string? MacAddress,
     IReadOnlyList<string> ListenUrls,
     IReadOnlyList<string> LanIpv4Addresses,
     bool IsPrivateNetwork,
@@ -55,6 +57,7 @@ public sealed record AgentNetworkDiagnosticsSnapshot(
     int Port,
     string ListeningInterface,
     IReadOnlyList<string> LanIpv4Addresses,
+    string? MacAddress,
     string FirewallRuleStatus,
     string ApiHealthStatus,
     string NetworkProfileStatus);

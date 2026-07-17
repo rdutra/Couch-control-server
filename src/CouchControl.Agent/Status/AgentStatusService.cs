@@ -70,6 +70,7 @@ public sealed class AgentStatusService : IAgentStatusService
             ListeningAddresses: diagnostics.LanIpv4Addresses.Count == 0
                 ? diagnostics.ApiHealthStatus
                 : string.Join(", ", diagnostics.LanIpv4Addresses),
+            MacAddress: diagnostics.MacAddress ?? "Unavailable",
             SteamStatus: steamStatus,
             LastResult: FormatLastResult(operationStatus));
     }

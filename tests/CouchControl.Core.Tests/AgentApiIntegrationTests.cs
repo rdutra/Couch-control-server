@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Net.NetworkInformation;
 using CouchControl.Core.Abstractions;
 using CouchControl.Core.Models;
 using CouchControl.Core.Orchestration;
@@ -57,6 +58,9 @@ public sealed class AgentApiIntegrationTests
         Assert.NotNull(payload);
         Assert.Equal("Living Room Gaming PC", payload.AgentName);
         Assert.Equal("v1", payload.ApiVersion);
+        Assert.Equal("http://192.168.1.40:47981", payload.AgentBaseUrl);
+        Assert.Equal(["192.168.1.40"], payload.LanIpv4Addresses);
+        Assert.Equal("00:11:22:33:44:55", payload.MacAddress);
         Assert.False(string.IsNullOrWhiteSpace(payload.Token));
         Assert.NotEqual(host.Token, payload.Token);
 
@@ -125,6 +129,9 @@ public sealed class AgentApiIntegrationTests
         Assert.True(status.TvConnected);
         Assert.True(status.SteamInstalled);
         Assert.False(status.SteamRunning);
+        Assert.Equal("http://192.168.1.40:47981", status.AgentBaseUrl);
+        Assert.Equal(["192.168.1.40"], status.LanIpv4Addresses);
+        Assert.Equal("00:11:22:33:44:55", status.MacAddress);
 
         var displays = await host.Client.GetFromJsonAsync<List<DisplayResponse>>("/api/v1/displays");
         Assert.NotNull(displays);
@@ -311,6 +318,7 @@ public sealed class AgentApiIntegrationTests
             builder.Services.AddCouchControlAgentApi();
             builder.Services.AddSingleton<IProtectedDataService, PassthroughProtectedDataService>();
             builder.Services.AddSingleton<TimeProvider>(timeProvider);
+            builder.Services.AddSingleton<ILocalNetworkInterfaceProvider, FakeLocalNetworkInterfaceProvider>();
 
             var app = builder.Build();
             app.MapCouchControlAgentApi();
@@ -418,6 +426,41 @@ public sealed class AgentApiIntegrationTests
             AgentConfiguration configuration,
             CancellationToken cancellationToken = default) =>
             Task.FromResult(OperationResult.Success("No audio switch command configured."));
+    }
+
+    private sealed class FakeLocalNetworkInterfaceProvider : ILocalNetworkInterfaceProvider
+    {
+        private static readonly AgentNetworkInterface Adapter = new(
+            "ethernet",
+            "Ethernet",
+            "Intel Ethernet Adapter",
+            "00:11:22:33:44:55",
+            NetworkInterfaceType.Ethernet,
+            7,
+            true,
+            false,
+            false,
+            false,
+            true,
+            false,
+            ["192.168.1.40"],
+            true);
+
+        public IReadOnlyList<AgentNetworkInterface> GetInterfaces() => [Adapter];
+
+        public AgentApiBindingPlan CreateBindingPlan(AgentConfiguration configuration) =>
+            new(
+                configuration.ApiPort,
+                AgentApiListeningInterface.Automatic,
+                Adapter.Id,
+                Adapter.Name,
+                Adapter.MacAddress,
+                [$"http://192.168.1.40:{configuration.ApiPort}"],
+                Adapter.LanIpv4Addresses,
+                true,
+                "Ethernet: 192.168.1.40");
+
+        public string GetNetworkProfileStatus(string? selectedInterfaceId = null) => "Private";
     }
 
     private sealed class PassthroughProtectedDataService : IProtectedDataService

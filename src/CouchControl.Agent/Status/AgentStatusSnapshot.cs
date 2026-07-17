@@ -7,5 +7,6 @@ public sealed record AgentStatusSnapshot(
     string ConfiguredTv,
     string TvConnectionStatus,
     string ListeningAddresses,
+    string MacAddress,
     string SteamStatus,
     string LastResult);

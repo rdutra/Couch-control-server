@@ -113,7 +113,7 @@ public sealed class AgentApplicationContext : ApplicationContext
             apiTokenStore,
             networkInterfaceProvider,
             firewallRuleManager);
-        pairingCodeForm = new PairingCodeForm(pairingService);
+        pairingCodeForm = new PairingCodeForm(pairingService, configurationStore, networkInterfaceProvider);
 
         var contextMenu = new ContextMenuStrip();
         contextMenu.Opening += (_, _) => RefreshMenuState();
