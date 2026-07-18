@@ -61,6 +61,9 @@ public sealed class AgentApiIntegrationTests
         Assert.Equal("v1", payload.ApiVersion);
         Assert.Equal("http://192.168.1.40:47981", payload.AgentBaseUrl);
         Assert.Equal(["192.168.1.40"], payload.LanIpv4Addresses);
+        Assert.Equal(["255.255.255.0"], payload.LanIpv4SubnetMasks);
+        Assert.Equal("192.168.1.255", payload.PreferredWakeOnLanBroadcastAddress);
+        Assert.Equal(["192.168.1.255", "255.255.255.255"], payload.WakeOnLanBroadcastAddresses);
         Assert.Equal("00:11:22:33:44:55", payload.MacAddress);
         Assert.False(string.IsNullOrWhiteSpace(payload.Token));
         Assert.NotEqual(host.Token, payload.Token);
@@ -133,6 +136,9 @@ public sealed class AgentApiIntegrationTests
         Assert.False(status.SteamRunning);
         Assert.Equal("http://192.168.1.40:47981", status.AgentBaseUrl);
         Assert.Equal(["192.168.1.40"], status.LanIpv4Addresses);
+        Assert.Equal(["255.255.255.0"], status.LanIpv4SubnetMasks);
+        Assert.Equal("192.168.1.255", status.PreferredWakeOnLanBroadcastAddress);
+        Assert.Equal(["192.168.1.255", "255.255.255.255"], status.WakeOnLanBroadcastAddresses);
         Assert.Equal("00:11:22:33:44:55", status.MacAddress);
 
         var displays = await host.Client.GetFromJsonAsync<List<DisplayResponse>>("/api/v1/displays");
@@ -446,6 +452,8 @@ public sealed class AgentApiIntegrationTests
             true,
             false,
             ["192.168.1.40"],
+            ["255.255.255.0"],
+            ["192.168.1.255", "255.255.255.255"],
             true);
 
         public IReadOnlyList<AgentNetworkInterface> GetInterfaces() => [Adapter];
@@ -459,6 +467,9 @@ public sealed class AgentApiIntegrationTests
                 Adapter.MacAddress,
                 [$"http://192.168.1.40:{configuration.ApiPort}"],
                 Adapter.LanIpv4Addresses,
+                Adapter.LanIpv4SubnetMasks,
+                "192.168.1.255",
+                Adapter.WakeOnLanBroadcastAddresses,
                 true,
                 "Ethernet: 192.168.1.40");
 

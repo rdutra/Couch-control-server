@@ -56,6 +56,8 @@ dotnet publish $cliProjectPath `
   @publishProperties `
   --output $cliOutput
 
+Get-ChildItem -Path $packageRoot -Filter "createdump.exe" -Recurse | Remove-Item -Force
+
 Copy-Item $installerSource (Join-Path $packageRoot "install.ps1")
 Copy-Item $uninstallerSource (Join-Path $packageRoot "uninstall.ps1")
 Copy-Item $installReadmeSource (Join-Path $packageRoot "README-INSTALL.md")

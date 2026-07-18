@@ -20,7 +20,7 @@ public sealed class AgentNetworkTests
                     NetworkInterfaceType.Ethernet,
                     true,
                     7,
-                    [IPAddress.Parse("192.168.1.40")]),
+                    [Ipv4("192.168.1.40", "255.255.255.0")]),
                 new NetworkAdapterSnapshot(
                     "vpn",
                     "Tailscale",
@@ -29,7 +29,7 @@ public sealed class AgentNetworkTests
                     NetworkInterfaceType.Tunnel,
                     true,
                     9,
-                    [IPAddress.Parse("100.90.10.12")]),
+                    [Ipv4("100.90.10.12", "255.255.255.0")]),
                 new NetworkAdapterSnapshot(
                     "virtual",
                     "vEthernet",
@@ -38,7 +38,7 @@ public sealed class AgentNetworkTests
                     NetworkInterfaceType.Ethernet,
                     true,
                     12,
-                    [IPAddress.Parse("192.168.50.1")]),
+                    [Ipv4("192.168.50.1", "255.255.255.0")]),
                 new NetworkAdapterSnapshot(
                     "wifi-public",
                     "Wi-Fi",
@@ -47,7 +47,7 @@ public sealed class AgentNetworkTests
                     NetworkInterfaceType.Wireless80211,
                     true,
                     8,
-                    [IPAddress.Parse("192.168.0.25")])
+                    [Ipv4("192.168.0.25", "255.255.255.0")])
             ],
             [
                 new NetworkProfileSnapshot(7, "Ethernet", NetworkCategory.Private),
@@ -60,6 +60,9 @@ public sealed class AgentNetworkTests
 
         Assert.Equal("ethernet", plan.SelectedInterfaceId);
         Assert.Equal(["192.168.1.40"], plan.LanIpv4Addresses);
+        Assert.Equal(["255.255.255.0"], plan.LanIpv4SubnetMasks);
+        Assert.Equal("192.168.1.255", plan.PreferredWakeOnLanBroadcastAddress);
+        Assert.Equal(["192.168.1.255", "255.255.255.255"], plan.WakeOnLanBroadcastAddresses);
         Assert.Equal(["http://192.168.1.40:47981"], plan.ListenUrls);
         Assert.Equal("00:11:22:33:44:55", plan.MacAddress);
     }
@@ -77,7 +80,7 @@ public sealed class AgentNetworkTests
                     NetworkInterfaceType.Ethernet,
                     true,
                     7,
-                    [IPAddress.Parse("192.168.1.40")]),
+                    [Ipv4("192.168.1.40", "255.255.255.0")]),
                 new NetworkAdapterSnapshot(
                     "wifi",
                     "Wi-Fi",
@@ -86,7 +89,7 @@ public sealed class AgentNetworkTests
                     NetworkInterfaceType.Wireless80211,
                     true,
                     8,
-                    [IPAddress.Parse("192.168.0.25")])
+                    [Ipv4("192.168.0.25", "255.255.255.0")])
             ],
             [
                 new NetworkProfileSnapshot(7, "Ethernet", NetworkCategory.Private),
@@ -101,6 +104,9 @@ public sealed class AgentNetworkTests
 
         Assert.Equal("wifi", plan.SelectedInterfaceId);
         Assert.Equal(["192.168.0.25"], plan.LanIpv4Addresses);
+        Assert.Equal(["255.255.255.0"], plan.LanIpv4SubnetMasks);
+        Assert.Equal("192.168.0.255", plan.PreferredWakeOnLanBroadcastAddress);
+        Assert.Equal(["192.168.0.255", "255.255.255.255"], plan.WakeOnLanBroadcastAddresses);
         Assert.Equal("AA:BB:CC:DD:EE:FF", plan.MacAddress);
     }
 
@@ -152,4 +158,7 @@ public sealed class AgentNetworkTests
 
         public IReadOnlyList<NetworkProfileSnapshot> GetNetworkProfiles() => profiles;
     }
+
+    private static NetworkIpv4AddressSnapshot Ipv4(string address, string mask) =>
+        new(IPAddress.Parse(address), IPAddress.Parse(mask));
 }

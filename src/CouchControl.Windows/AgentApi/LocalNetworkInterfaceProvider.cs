@@ -83,6 +83,9 @@ public sealed class LocalNetworkInterfaceProvider : ILocalNetworkInterfaceProvid
                 null,
                 Array.Empty<string>(),
                 Array.Empty<string>(),
+                Array.Empty<string>(),
+                null,
+                Array.Empty<string>(),
                 false,
                 "No active private LAN IPv4 interface is available for the agent API.");
         }
@@ -99,6 +102,9 @@ public sealed class LocalNetworkInterfaceProvider : ILocalNetworkInterfaceProvid
             selected.MacAddress,
             urls,
             selected.LanIpv4Addresses,
+            selected.LanIpv4SubnetMasks,
+            selected.WakeOnLanBroadcastAddresses.FirstOrDefault(static address => address != "255.255.255.255"),
+            selected.WakeOnLanBroadcastAddresses,
             selected.IsPrivateProfile,
             $"{selected.Name}: {string.Join(", ", selected.LanIpv4Addresses)}");
     }
@@ -148,8 +154,23 @@ public sealed class LocalNetworkInterfaceProvider : ILocalNetworkInterfaceProvid
         var isVpn = adapter.Type is NetworkInterfaceType.Ppp or NetworkInterfaceType.Tunnel
             || ContainsKeyword(text, VpnKeywords);
         var profile = FindProfile(adapter, profiles);
-        var addresses = adapter.UnicastAddresses
-            .Where(static address => IsLanIpv4(address))
+        var lanAddresses = adapter.UnicastAddresses
+            .Where(static address => IsLanIpv4(address.Address))
+            .ToArray();
+        var addresses = lanAddresses
+            .Select(static address => address.Address.ToString())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var subnetMasks = lanAddresses
+            .Select(static address => address.IPv4Mask?.ToString())
+            .OfType<string>()
+            .Where(static mask => !string.IsNullOrWhiteSpace(mask))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var broadcastAddresses = lanAddresses
+            .Select(static address => TryGetBroadcastAddress(address.Address, address.IPv4Mask))
+            .OfType<IPAddress>()
+            .Append(IPAddress.Broadcast)
             .Select(static address => address.ToString())
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
@@ -174,6 +195,8 @@ public sealed class LocalNetworkInterfaceProvider : ILocalNetworkInterfaceProvid
             profile?.Category == NetworkCategory.Private,
             profile?.Category == NetworkCategory.Public,
             addresses,
+            subnetMasks,
+            broadcastAddresses,
             isRecommended);
     }
 
@@ -200,6 +223,25 @@ public sealed class LocalNetworkInterfaceProvider : ILocalNetworkInterfaceProvid
             192 when bytes[1] == 168 => true,
             _ => false
         };
+    }
+
+    private static IPAddress? TryGetBroadcastAddress(IPAddress address, IPAddress? mask)
+    {
+        if (address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork ||
+            mask?.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork)
+        {
+            return null;
+        }
+
+        var addressBytes = address.GetAddressBytes();
+        var maskBytes = mask.GetAddressBytes();
+        var broadcastBytes = new byte[addressBytes.Length];
+        for (var i = 0; i < addressBytes.Length; i++)
+        {
+            broadcastBytes[i] = (byte)(addressBytes[i] | ~maskBytes[i]);
+        }
+
+        return new IPAddress(broadcastBytes);
     }
 
     private static int GetPriority(NetworkInterfaceType type) => type switch
@@ -280,11 +322,31 @@ internal sealed class NetworkInterfaceSystem : INetworkInterfaceSystem
                     adapter.NetworkInterfaceType,
                     adapter.OperationalStatus == OperationalStatus.Up,
                     ipv4?.Index,
-                    adapter.GetIPProperties().UnicastAddresses.Select(static address => address.Address).ToArray());
+                    adapter.GetIPProperties()
+                        .UnicastAddresses
+                        .Select(static address => ToAddressSnapshot(address))
+                        .ToArray());
             })
             .ToArray();
 
     public IReadOnlyList<NetworkProfileSnapshot> GetNetworkProfiles() => profileReader.ReadProfiles();
+
+    private static NetworkIpv4AddressSnapshot ToAddressSnapshot(UnicastIPAddressInformation address)
+    {
+        IPAddress? mask = null;
+        if (address.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+        {
+            try
+            {
+                mask = address.IPv4Mask;
+            }
+            catch
+            {
+            }
+        }
+
+        return new NetworkIpv4AddressSnapshot(address.Address, mask);
+    }
 }
 
 internal sealed record NetworkAdapterSnapshot(
@@ -295,7 +357,9 @@ internal sealed record NetworkAdapterSnapshot(
     NetworkInterfaceType Type,
     bool IsUp,
     int? InterfaceIndex,
-    IReadOnlyList<IPAddress> UnicastAddresses);
+    IReadOnlyList<NetworkIpv4AddressSnapshot> UnicastAddresses);
+
+internal sealed record NetworkIpv4AddressSnapshot(IPAddress Address, IPAddress? IPv4Mask);
 
 internal enum NetworkCategory
 {

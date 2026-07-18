@@ -145,16 +145,48 @@ artifacts\win-x64\CouchControl\
 artifacts\win-x64\CouchControl-win-x64.zip
 ```
 
-To build the optional Windows setup wizard on a machine with Inno Setup installed:
+The package script publishes self-contained `win-x64` builds for the tray agent and CLI, copies the installer support files, removes the generated .NET dump helper executable, and creates the zip package.
+
+To build the setup wizard on Windows, install Inno Setup and run:
 
 ```powershell
 .\packaging\windows\build-setup-exe.ps1
 ```
 
-That produces:
+To build the same setup wizard from macOS, install NSIS and run:
+
+```bash
+brew install nsis
+./packaging/windows/build-nsis-setup.sh
+```
+
+Both setup wizard paths produce:
 
 ```text
 artifacts\win-x64\CouchControlSetup-win-x64.exe
+```
+
+If you need a completely fresh installer, remove the generated output first and rebuild:
+
+```powershell
+Remove-Item artifacts\win-x64 -Recurse -Force
+.\scripts\publish-win-x64.ps1
+.\packaging\windows\build-setup-exe.ps1
+```
+
+Or from macOS:
+
+```bash
+rm -rf artifacts/win-x64
+dotnet publish src/CouchControl.Agent/CouchControl.Agent.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=false -p:PublishTrimmed=false --output artifacts/win-x64/CouchControl/agent
+dotnet publish src/CouchControl.Cli/CouchControl.Cli.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=false -p:PublishTrimmed=false --output artifacts/win-x64/CouchControl/cli
+find artifacts/win-x64/CouchControl -name createdump.exe -delete
+cp packaging/windows/install.ps1 artifacts/win-x64/CouchControl/install.ps1
+cp packaging/windows/uninstall.ps1 artifacts/win-x64/CouchControl/uninstall.ps1
+cp packaging/windows/README-INSTALL.md artifacts/win-x64/CouchControl/README-INSTALL.md
+printf '0.1.0-mvp\n' > artifacts/win-x64/CouchControl/VERSION
+cd artifacts/win-x64/CouchControl && zip -qry ../CouchControl-win-x64.zip . && cd ../../..
+./packaging/windows/build-nsis-setup.sh
 ```
 
 On the target Windows PC, run the setup wizard, or extract the zip and run:

@@ -101,6 +101,9 @@ public static class AgentApiApplicationExtensions
             steamLauncher.IsRunning(),
             bindingPlan.ListenUrls.FirstOrDefault(),
             bindingPlan.LanIpv4Addresses,
+            bindingPlan.LanIpv4SubnetMasks,
+            bindingPlan.PreferredWakeOnLanBroadcastAddress,
+            bindingPlan.WakeOnLanBroadcastAddresses,
             bindingPlan.MacAddress,
             status.LastOperationResult?.Message));
     }
@@ -152,6 +155,9 @@ public static class AgentApiApplicationExtensions
             "v1",
             bindingPlan.ListenUrls.FirstOrDefault(),
             bindingPlan.LanIpv4Addresses,
+            bindingPlan.LanIpv4SubnetMasks,
+            bindingPlan.PreferredWakeOnLanBroadcastAddress,
+            bindingPlan.WakeOnLanBroadcastAddresses,
             bindingPlan.MacAddress));
     }
 
@@ -400,6 +406,9 @@ public sealed record PairResponse(
     string ApiVersion,
     string? AgentBaseUrl,
     IReadOnlyList<string> LanIpv4Addresses,
+    IReadOnlyList<string> LanIpv4SubnetMasks,
+    string? PreferredWakeOnLanBroadcastAddress,
+    IReadOnlyList<string> WakeOnLanBroadcastAddresses,
     string? MacAddress);
 
 public sealed record OperationAcceptedResponse(bool Accepted, Guid OperationId);
@@ -418,6 +427,9 @@ public sealed record StatusResponse(
     bool SteamRunning,
     string? AgentBaseUrl,
     IReadOnlyList<string> LanIpv4Addresses,
+    IReadOnlyList<string> LanIpv4SubnetMasks,
+    string? PreferredWakeOnLanBroadcastAddress,
+    IReadOnlyList<string> WakeOnLanBroadcastAddresses,
     string? MacAddress,
     string? LastResult);
 

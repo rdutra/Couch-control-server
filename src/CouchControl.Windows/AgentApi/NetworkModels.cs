@@ -21,6 +21,8 @@ public sealed record AgentNetworkInterface(
     bool IsPrivateProfile,
     bool IsPublicProfile,
     IReadOnlyList<string> LanIpv4Addresses,
+    IReadOnlyList<string> LanIpv4SubnetMasks,
+    IReadOnlyList<string> WakeOnLanBroadcastAddresses,
     bool IsRecommended);
 
 public sealed record AgentApiBindingPlan(
@@ -31,6 +33,9 @@ public sealed record AgentApiBindingPlan(
     string? MacAddress,
     IReadOnlyList<string> ListenUrls,
     IReadOnlyList<string> LanIpv4Addresses,
+    IReadOnlyList<string> LanIpv4SubnetMasks,
+    string? PreferredWakeOnLanBroadcastAddress,
+    IReadOnlyList<string> WakeOnLanBroadcastAddresses,
     bool IsPrivateNetwork,
     string StatusMessage);
 
