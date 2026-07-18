@@ -1,6 +1,6 @@
-# CouchControl Windows x64 Package
+# CouchCTRL Windows Companion x64 Package
 
-This package installs the CouchControl tray agent and CLI for the current Windows user.
+This package installs the CouchCTRL Windows Companion tray agent and CLI for the current Windows user.
 
 If you received `CouchControlSetup-win-x64.exe`, run it and follow the wizard.
 
@@ -25,6 +25,16 @@ The default install location is:
 ```text
 %LOCALAPPDATA%\Programs\CouchControl
 ```
+
+## Update
+
+To update, install the newer CouchCTRL Windows Companion package over the existing installation. User configuration, pairing tokens, snapshots, and logs are kept under `%LOCALAPPDATA%\CouchControl`.
+
+For downloads, support, and privacy details:
+
+- https://couchctrl.app/download
+- https://couchctrl.app/support
+- https://couchctrl.app/privacy
 
 The installer creates Start Menu shortcuts under the current user's Start Menu.
 

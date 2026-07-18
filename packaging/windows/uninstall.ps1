@@ -6,7 +6,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$startMenuFolder = Join-Path ([Environment]::GetFolderPath("StartMenu")) "Programs\CouchControl"
+$startMenuFolder = Join-Path ([Environment]::GetFolderPath("StartMenu")) "Programs\CouchCTRL"
+$legacyStartMenuFolder = Join-Path ([Environment]::GetFolderPath("StartMenu")) "Programs\CouchControl"
 $runKeyPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
 $startupValueName = "CouchControl.Agent"
 $userDataRoot = Join-Path $env:LOCALAPPDATA "CouchControl"
@@ -19,6 +20,10 @@ if (Test-Path $startMenuFolder) {
     Remove-Item $startMenuFolder -Recurse -Force
 }
 
+if (Test-Path $legacyStartMenuFolder) {
+    Remove-Item $legacyStartMenuFolder -Recurse -Force
+}
+
 if (Test-Path $InstallRoot) {
     Remove-Item $InstallRoot -Recurse -Force
 }
@@ -27,7 +32,7 @@ if ($RemoveUserData -and (Test-Path $userDataRoot)) {
     Remove-Item $userDataRoot -Recurse -Force
 }
 
-Write-Host "CouchControl application files and shortcuts were removed."
+Write-Host "CouchCTRL Windows Companion application files and shortcuts were removed."
 if ($RemoveUserData) {
     Write-Host "User configuration, tokens, snapshots, and logs were removed."
 } else {

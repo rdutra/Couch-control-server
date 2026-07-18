@@ -17,6 +17,8 @@ $packageZip = Join-Path $outputRoot "CouchControl-win-x64.zip"
 $installerSource = Join-Path $repoRoot "packaging/windows/install.ps1"
 $uninstallerSource = Join-Path $repoRoot "packaging/windows/uninstall.ps1"
 $installReadmeSource = Join-Path $repoRoot "packaging/windows/README-INSTALL.md"
+$privacySource = Join-Path $repoRoot "docs/PRIVACY.md"
+$supportSource = Join-Path $repoRoot "docs/SUPPORT.md"
 
 $env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = "1"
 $env:DOTNET_NOLOGO = "1"
@@ -61,6 +63,8 @@ Get-ChildItem -Path $packageRoot -Filter "createdump.exe" -Recurse | Remove-Item
 Copy-Item $installerSource (Join-Path $packageRoot "install.ps1")
 Copy-Item $uninstallerSource (Join-Path $packageRoot "uninstall.ps1")
 Copy-Item $installReadmeSource (Join-Path $packageRoot "README-INSTALL.md")
+Copy-Item $privacySource (Join-Path $packageRoot "PRIVACY.md")
+Copy-Item $supportSource (Join-Path $packageRoot "SUPPORT.md")
 
 $version = (Get-Item (Join-Path $agentOutput "CouchControl.Agent.exe")).VersionInfo.ProductVersion
 Set-Content -Path (Join-Path $packageRoot "VERSION") -Value $version -Encoding UTF8
