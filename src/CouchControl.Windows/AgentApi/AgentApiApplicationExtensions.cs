@@ -165,7 +165,7 @@ public static class AgentApiApplicationExtensions
     {
         if (!operationService.TryStartActivateCouchMode(out var operationId))
         {
-            return Results.Conflict(new ErrorResponse("Another profile operation is already running."));
+            return Results.Conflict(new ErrorResponse("Another profile operation is already running or the previous display change is still settling."));
         }
 
         return Results.Accepted($"/api/v1/operations/{operationId}", new OperationAcceptedResponse(true, operationId));
@@ -175,7 +175,7 @@ public static class AgentApiApplicationExtensions
     {
         if (!operationService.TryStartActivateDesktopMode(out var operationId))
         {
-            return Results.Conflict(new ErrorResponse("Another profile operation is already running."));
+            return Results.Conflict(new ErrorResponse("Another profile operation is already running or the previous display change is still settling."));
         }
 
         return Results.Accepted($"/api/v1/operations/{operationId}", new OperationAcceptedResponse(true, operationId));

@@ -214,6 +214,29 @@ public sealed class AgentApiIntegrationTests
     }
 
     [Fact]
+    public async Task ActivateMode_Returns409_DuringDisplaySettleWindowAfterOperationCompletes()
+    {
+        await using var host = await AgentApiTestHost.StartAsync(seedDesktopSnapshot: true);
+        host.Client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", host.Token);
+
+        var firstResponse = await host.Client.PostAsync("/api/v1/modes/couch", content: null);
+        Assert.Equal(HttpStatusCode.Accepted, firstResponse.StatusCode);
+        var accepted = await firstResponse.Content.ReadFromJsonAsync<OperationAcceptedResponse>();
+        Assert.NotNull(accepted);
+
+        var operation = await host.WaitForOperationAsync(accepted.OperationId);
+        Assert.Equal("succeeded", operation.State);
+
+        var immediateResponse = await host.Client.PostAsync("/api/v1/modes/desktop", content: null);
+        Assert.Equal(HttpStatusCode.Conflict, immediateResponse.StatusCode);
+
+        host.AdvanceTime(TimeSpan.FromSeconds(16));
+
+        var laterResponse = await host.Client.PostAsync("/api/v1/modes/desktop", content: null);
+        Assert.Equal(HttpStatusCode.Accepted, laterResponse.StatusCode);
+    }
+
+    [Fact]
     public async Task GetOperation_Returns404_ForUnknownOperation()
     {
         await using var host = await AgentApiTestHost.StartAsync();

@@ -24,20 +24,25 @@ public interface IAgentApiOperationService
 public sealed class AgentApiOperationService : IAgentApiOperationService
 {
     private const int MaxOperations = 50;
+    private static readonly TimeSpan DisplayOperationSettleWindow = TimeSpan.FromSeconds(15);
 
     private readonly IProfileOrchestrator orchestrator;
     private readonly ILogger<AgentApiOperationService> logger;
+    private readonly TimeProvider timeProvider;
     private readonly object gate = new();
     private readonly Dictionary<Guid, AgentOperationRecord> operations = [];
     private readonly LinkedList<Guid> operationOrder = [];
     private Guid? activeOperationId;
+    private DateTimeOffset rejectNewOperationsUntilUtc;
 
     public AgentApiOperationService(
         IProfileOrchestrator orchestrator,
-        ILogger<AgentApiOperationService> logger)
+        ILogger<AgentApiOperationService> logger,
+        TimeProvider timeProvider)
     {
         this.orchestrator = orchestrator;
         this.logger = logger;
+        this.timeProvider = timeProvider;
     }
 
     public event EventHandler<AgentOperationRecord>? OperationCompleted;
@@ -89,7 +94,8 @@ public sealed class AgentApiOperationService : IAgentApiOperationService
 
         lock (gate)
         {
-            if (activeOperationId.HasValue)
+            var now = timeProvider.GetUtcNow();
+            if (activeOperationId.HasValue || now < rejectNewOperationsUntilUtc)
             {
                 operationId = Guid.Empty;
                 return false;
@@ -102,7 +108,7 @@ public sealed class AgentApiOperationService : IAgentApiOperationService
                 mode,
                 operationType,
                 AgentApiOperationState.Running,
-                DateTimeOffset.UtcNow,
+                now,
                 null,
                 null,
                 null,
@@ -125,7 +131,7 @@ public sealed class AgentApiOperationService : IAgentApiOperationService
                 {
                     State = MapState(result.Status),
                     StartedAtUtc = result.StartedAtUtc,
-                    CompletedAtUtc = result.CompletedAtUtc ?? DateTimeOffset.UtcNow,
+                    CompletedAtUtc = result.CompletedAtUtc ?? timeProvider.GetUtcNow(),
                     Message = result.SteamResult?.Message ?? result.DisplayResult.Message,
                     ErrorCode = result.SteamResult?.ErrorCode ?? result.DisplayResult.ErrorCode,
                     Result = result
@@ -137,7 +143,7 @@ public sealed class AgentApiOperationService : IAgentApiOperationService
                 completed = record with
                 {
                     State = AgentApiOperationState.Failed,
-                    CompletedAtUtc = DateTimeOffset.UtcNow,
+                    CompletedAtUtc = timeProvider.GetUtcNow(),
                     Message = ex.Message,
                     ErrorCode = "agent_operation_exception"
                 };
@@ -149,6 +155,7 @@ public sealed class AgentApiOperationService : IAgentApiOperationService
                 if (activeOperationId == startedOperationId)
                 {
                     activeOperationId = null;
+                    rejectNewOperationsUntilUtc = timeProvider.GetUtcNow().Add(DisplayOperationSettleWindow);
                 }
             }
 
