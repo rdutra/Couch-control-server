@@ -184,6 +184,66 @@ public sealed class AgentApiIntegrationTests
     }
 
     [Fact]
+    public async Task MouseInput_RequiresAuthentication_AndForwardsTrackpadEvents()
+    {
+        await using var host = await AgentApiTestHost.StartAsync();
+
+        var unauthorized = await host.Client.PostAsJsonAsync(
+            "/api/v1/input/mouse",
+            new MouseInputRequest("move", DeltaX: 12, DeltaY: -7));
+        Assert.Equal(HttpStatusCode.Unauthorized, unauthorized.StatusCode);
+
+        host.Client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", host.Token);
+        Assert.Equal(
+            HttpStatusCode.NoContent,
+            (await host.Client.PostAsJsonAsync(
+                "/api/v1/input/mouse",
+                new MouseInputRequest("move", DeltaX: 12.4, DeltaY: -7.4))).StatusCode);
+        Assert.Equal(
+            HttpStatusCode.NoContent,
+            (await host.Client.PostAsJsonAsync(
+                "/api/v1/input/mouse",
+                new MouseInputRequest("button", Button: "left", Pressed: true))).StatusCode);
+        Assert.Equal(
+            HttpStatusCode.NoContent,
+            (await host.Client.PostAsJsonAsync(
+                "/api/v1/input/mouse",
+                new MouseInputRequest("button", Button: "left", Pressed: false))).StatusCode);
+        Assert.Equal(
+            HttpStatusCode.NoContent,
+            (await host.Client.PostAsJsonAsync(
+                "/api/v1/input/mouse",
+                new MouseInputRequest("scroll", Delta: -120))).StatusCode);
+
+        Assert.Equal(
+            [
+                "move:12,-7",
+                "button:Left,True",
+                "button:Left,False",
+                "scroll:-120"
+            ],
+            host.MouseInput.Events);
+    }
+
+    [Fact]
+    public async Task MouseInput_RejectsMalformedCommands()
+    {
+        await using var host = await AgentApiTestHost.StartAsync();
+        host.Client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", host.Token);
+
+        var unknownType = await host.Client.PostAsJsonAsync(
+            "/api/v1/input/mouse",
+            new MouseInputRequest("teleport"));
+        var missingButtonState = await host.Client.PostAsJsonAsync(
+            "/api/v1/input/mouse",
+            new MouseInputRequest("button", Button: "left"));
+
+        Assert.Equal(HttpStatusCode.BadRequest, unknownType.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, missingButtonState.StatusCode);
+        Assert.Empty(host.MouseInput.Events);
+    }
+
+    [Fact]
     public async Task PairedDeviceToken_CanAccessProtectedEndpoints_ButNotAdministrativeEndpoints()
     {
         await using var host = await AgentApiTestHost.StartAsync();
@@ -292,17 +352,25 @@ public sealed class AgentApiIntegrationTests
         private readonly WebApplication app;
         private readonly MutableTimeProvider timeProvider;
 
-        private AgentApiTestHost(WebApplication app, HttpClient client, string token, MutableTimeProvider timeProvider)
+        private AgentApiTestHost(
+            WebApplication app,
+            HttpClient client,
+            string token,
+            MutableTimeProvider timeProvider,
+            FakeMouseInputService mouseInput)
         {
             this.app = app;
             this.timeProvider = timeProvider;
             Client = client;
             Token = token;
+            MouseInput = mouseInput;
         }
 
         public HttpClient Client { get; }
 
         public string Token { get; }
+
+        public FakeMouseInputService MouseInput { get; }
 
         public static async Task<AgentApiTestHost> StartAsync(
             bool seedDesktopSnapshot = false,
@@ -347,6 +415,8 @@ public sealed class AgentApiIntegrationTests
             builder.Services.AddSingleton<ProfileOrchestrator>();
             builder.Services.AddSingleton<IProfileOrchestrator>(static services => services.GetRequiredService<ProfileOrchestrator>());
             builder.Services.AddCouchControlAgentApi();
+            var mouseInput = new FakeMouseInputService();
+            builder.Services.AddSingleton<IMouseInputService>(mouseInput);
             builder.Services.AddSingleton<IProtectedDataService, PassthroughProtectedDataService>();
             builder.Services.AddSingleton<TimeProvider>(timeProvider);
             builder.Services.AddSingleton<ILocalNetworkInterfaceProvider, FakeLocalNetworkInterfaceProvider>();
@@ -357,7 +427,7 @@ public sealed class AgentApiIntegrationTests
             await app.StartAsync();
 
             var token = await app.Services.GetRequiredService<IApiTokenStore>().GetTokenAsync();
-            return new AgentApiTestHost(app, app.GetTestClient(), token, timeProvider);
+            return new AgentApiTestHost(app, app.GetTestClient(), token, timeProvider, mouseInput);
         }
 
         public void AdvanceTime(TimeSpan by) => timeProvider.Advance(by);
@@ -457,6 +527,17 @@ public sealed class AgentApiIntegrationTests
             AgentConfiguration configuration,
             CancellationToken cancellationToken = default) =>
             Task.FromResult(OperationResult.Success("No audio switch command configured."));
+    }
+
+    public sealed class FakeMouseInputService : IMouseInputService
+    {
+        public List<string> Events { get; } = [];
+
+        public void Move(int deltaX, int deltaY) => Events.Add($"move:{deltaX},{deltaY}");
+
+        public void Scroll(int delta) => Events.Add($"scroll:{delta}");
+
+        public void Button(MouseButton button, bool pressed) => Events.Add($"button:{button},{pressed}");
     }
 
     private sealed class FakeLocalNetworkInterfaceProvider : ILocalNetworkInterfaceProvider

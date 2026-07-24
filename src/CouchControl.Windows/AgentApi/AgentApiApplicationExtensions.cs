@@ -32,6 +32,7 @@ public static class AgentApiApplicationExtensions
         services.AddSingleton<IAgentNetworkDiagnosticsService, AgentNetworkDiagnosticsService>();
         services.AddSingleton<AgentApiRuntimeOptionsProvider>();
         services.AddSingleton<IAgentApiOperationService, AgentApiOperationService>();
+        services.AddSingleton<IMouseInputService, WindowsMouseInputService>();
 
         return services;
     }
@@ -52,6 +53,7 @@ public static class AgentApiApplicationExtensions
         protectedApi.MapGet("/displays", GetDisplaysAsync);
         protectedApi.MapPost("/modes/couch", StartCouchModeAsync);
         protectedApi.MapPost("/modes/desktop", StartDesktopModeAsync);
+        protectedApi.MapPost("/input/mouse", SendMouseInput);
         protectedApi.MapGet("/operations/{operationId:guid}", GetOperationAsync);
         protectedApi.MapGet("/paired-devices", GetPairedDevicesAsync)
             .AddEndpointFilter<AdministrativeApiAuthorizationFilter>();
@@ -179,6 +181,36 @@ public static class AgentApiApplicationExtensions
         }
 
         return Results.Accepted($"/api/v1/operations/{operationId}", new OperationAcceptedResponse(true, operationId));
+    }
+
+    private static IResult SendMouseInput(MouseInputRequest request, IMouseInputService mouse)
+    {
+        const int maximumMovement = 500;
+        const int maximumScroll = 1200;
+
+        switch (request.Type?.Trim().ToLowerInvariant())
+        {
+            case "move":
+                mouse.Move(
+                    Math.Clamp((int)Math.Round(request.DeltaX), -maximumMovement, maximumMovement),
+                    Math.Clamp((int)Math.Round(request.DeltaY), -maximumMovement, maximumMovement));
+                break;
+            case "scroll":
+                mouse.Scroll(Math.Clamp(request.Delta, -maximumScroll, maximumScroll));
+                break;
+            case "button":
+                if (!Enum.TryParse<MouseButton>(request.Button, true, out var button) || request.Pressed is null)
+                {
+                    return Results.BadRequest(new ErrorResponse("A supported button and pressed state are required."));
+                }
+
+                mouse.Button(button, request.Pressed.Value);
+                break;
+            default:
+                return Results.BadRequest(new ErrorResponse("Mouse input type must be move, scroll, or button."));
+        }
+
+        return Results.NoContent();
     }
 
     private static IResult GetOperationAsync(Guid operationId, IAgentApiOperationService operationService)
@@ -399,6 +431,14 @@ public sealed record HealthResponse(bool Healthy, string Version);
 public sealed record ErrorResponse(string Message);
 
 public sealed record PairRequest(string PairingCode, string DeviceName);
+
+public sealed record MouseInputRequest(
+    string Type,
+    double DeltaX = 0,
+    double DeltaY = 0,
+    int Delta = 0,
+    string? Button = null,
+    bool? Pressed = null);
 
 public sealed record PairResponse(
     string Token,

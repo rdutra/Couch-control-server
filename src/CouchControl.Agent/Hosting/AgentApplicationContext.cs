@@ -48,6 +48,7 @@ public sealed class AgentApplicationContext : ApplicationContext
     private readonly SettingsForm settingsForm;
     private readonly PairingCodeForm pairingCodeForm;
     private bool startupRegistrationEnabled;
+    private bool firstRunSetupShown;
 
     public AgentApplicationContext(
         IAgentApiOperationService operationService,
@@ -173,6 +174,9 @@ public sealed class AgentApplicationContext : ApplicationContext
     public void StartStartupRecoveryCheck() =>
         uiInvoker.BeginInvoke(async () => await RunStartupRecoveryCheckAsync());
 
+    public void StartFirstRunSetupCheck() =>
+        uiInvoker.BeginInvoke(async () => await RunFirstRunSetupCheckAsync());
+
     private static Icon LoadTrayIcon()
     {
         var assembly = typeof(AgentApplicationContext).Assembly;
@@ -195,6 +199,49 @@ public sealed class AgentApplicationContext : ApplicationContext
         clearDesktopSnapshotItem.Enabled = !operationService.IsOperationRunning;
         startWithWindowsItem.Enabled = !operationService.IsOperationRunning;
         exitItem.Enabled = !operationService.IsOperationRunning;
+    }
+
+    private async Task RunFirstRunSetupCheckAsync()
+    {
+        try
+        {
+            if (firstRunSetupShown || File.Exists(paths.ConfigurationFilePath))
+            {
+                return;
+            }
+
+            firstRunSetupShown = true;
+
+            logger.LogInformation(
+                "Configuration file was not found at {ConfigurationFilePath}; showing first-run setup.",
+                paths.ConfigurationFilePath);
+
+            notifyIcon.ShowBalloonTip(
+                5000,
+                "Setup required",
+                "Choose your couch TV and save a desktop snapshot before activating couch mode.",
+                ToolTipIcon.Info);
+
+            await ShowSettingsWindowAsync();
+
+            MessageBox.Show(
+                settingsForm,
+                "CouchControl needs a first-run setup before it can switch displays safely.\n\n" +
+                "1. In Display, choose the TV to use for Couch Mode.\n" +
+                "2. Confirm the preferred TV resolution and refresh rate.\n" +
+                "3. Save the current desktop snapshot so Desktop Mode can restore your monitor layout.\n" +
+                "4. Optional: choose couch and desktop audio devices in Audio.\n" +
+                "5. Click Save.\n\n" +
+                $"Configuration will be saved to:\n{paths.ConfigurationFilePath}",
+                "CouchControl First-Run Setup",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "First-run setup check failed.");
+            notifyIcon.ShowBalloonTip(5000, "Setup check failed", ex.Message, ToolTipIcon.Error);
+        }
     }
 
     private void ShowOperationNotification(ProfileActivationResult result)

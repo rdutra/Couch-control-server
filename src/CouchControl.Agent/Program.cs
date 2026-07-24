@@ -57,6 +57,7 @@ else
 try
 {
     var applicationContext = services.GetRequiredService<AgentApplicationContext>();
+    applicationContext.StartFirstRunSetupCheck();
     applicationContext.StartStartupRecoveryCheck();
     Application.Run(applicationContext);
 }
