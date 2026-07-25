@@ -11,7 +11,7 @@
     <header>
       <nav aria-label="Main navigation">
         <a href="../">CouchCTRL</a>
-        <a href="../download/">Download</a>
+        <a href="https://github.com/rdutra/Couch-control-server/releases">Download</a>
         <a href="./" aria-current="page">Support</a>
         <a href="../privacy/">Privacy</a>
       </nav>
@@ -54,6 +54,87 @@
         <li>Check that the Windows firewall allows the CouchCTRL Companion.</li>
         <li>Pair the device again if its token was reset.</li>
       </ul>
+
+      <h2>Reset CouchCTRL</h2>
+      <p>
+        CouchCTRL stores its configuration and user data under
+        <code>%LOCALAPPDATA%\CouchControl</code>, not in the Windows registry.
+        The only CouchCTRL registry value is the optional
+        <strong>Start with Windows</strong> entry.
+      </p>
+      <p>To reset only the saved settings:</p>
+      <ol>
+        <li>Exit CouchCTRL from its notification-area menu.</li>
+        <li>Open <code>%LOCALAPPDATA%\CouchControl</code> in File Explorer.</li>
+        <li>Rename <code>config.json</code> to <code>config.json.backup</code>.</li>
+        <li>Start CouchCTRL and configure it again.</li>
+      </ol>
+      <p>
+        For a complete factory reset, exit CouchCTRL and rename the entire
+        <code>%LOCALAPPDATA%\CouchControl</code> folder to
+        <code>CouchControl.backup</code>. This also resets paired devices,
+        display snapshots, the operation journal, and logs.
+      </p>
+      <p>
+        To remove the startup entry, turn off <strong>Start with Windows</strong>
+        in Settings or run:
+      </p>
+      <pre><code>reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "CouchControl.Agent" /f</code></pre>
+      <p>Do not delete the entire Windows <code>Run</code> registry key.</p>
+
+      <h2>Emergency display recovery</h2>
+      <div class="notice">
+        CouchCTRL cannot be tested against every combination of GPU, driver,
+        monitor, TV, dock, receiver, cable, refresh rate, scaling setting, and
+        Windows version. In rare cases, Windows may retain a broken display
+        topology after an unsuccessful switch.
+      </div>
+      <p>
+        If monitors remain blank, unavailable, incorrectly scaled, or unusable
+        after CouchCTRL exits, try these safer recovery steps first:
+      </p>
+      <ol>
+        <li>
+          Press <kbd>Windows</kbd>+<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd>
+          to reset the graphics driver.
+        </li>
+        <li>
+          Restart Windows and use <kbd>Windows</kbd>+<kbd>P</kbd> to select a
+          usable display mode.
+        </li>
+        <li>
+          Disconnect nonessential displays, docks, adapters, and receivers,
+          then reconnect them one at a time.
+        </li>
+        <li>
+          If necessary, start Windows in Safe Mode and repair or reinstall the
+          display driver.
+        </li>
+      </ol>
+      <p>
+        As a last resort, some systems may recover only after Windows' cached
+        display topology is cleared from:
+      </p>
+      <pre><code>HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\GraphicsDrivers\Configuration
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\GraphicsDrivers\Connectivity
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\GraphicsDrivers\ScaleFactors</code></pre>
+      <div class="notice">
+        <strong>Registry warning:</strong> These keys belong to Windows, require
+        administrator access, and contain system-wide display configuration for
+        every connected display. Deleting them causes Windows to rebuild its
+        display cache and can remove saved monitor positions, modes, and
+        scaling. Editing the wrong registry location can make Windows unstable
+        or unbootable. Back up the <code>GraphicsDrivers</code> key or create a
+        System Restore point first. If you are unsure, use Windows or GPU-vendor
+        support.
+      </div>
+      <p>
+        After backing up, exit CouchCTRL, disconnect nonessential external
+        displays, delete only the three subkeys listed above in Registry Editor,
+        restart Windows, wait for the desktop to finish loading, and reconnect
+        displays one at a time. Configure the display arrangement, resolution,
+        refresh rate, scaling, and CouchCTRL desktop snapshot again.
+      </p>
 
       <h2>Contact support</h2>
       <p>

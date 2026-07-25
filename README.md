@@ -6,6 +6,8 @@ CouchControl is a Windows-focused companion agent for a gaming PC that can switc
 
 Activating Couch Mode changes the active Windows display topology. It can disable your other monitors, move your primary desktop to the configured TV, and temporarily interrupt the local desktop session while Windows applies the new topology and mode. Save your normal desktop layout in the tray app before activating Couch Mode.
 
+CouchCTRL cannot be tested against every combination of GPU, driver, monitor, TV, dock, receiver, cable, refresh rate, scaling setting, and Windows version. In rare cases, Windows may retain a broken display topology after an unsuccessful switch. Recovery can require resetting Windows' cached display configuration, including the `Configuration`, `Connectivity`, and `ScaleFactors` registry subkeys described in [Emergency display recovery](#emergency-display-recovery). This is a system-wide, last-resort operation—not a normal CouchCTRL configuration reset.
+
 ## Architecture
 
 The solution is split into five projects:
@@ -226,6 +228,54 @@ For a first live test:
 8. Use **Status**, **Network Diagnostics**, and **View Logs** from the tray menu if either operation fails.
 
 Closing the Settings or Status window does not stop the agent. Starting a second instance reuses the existing tray process.
+
+### Resetting CouchCTRL
+
+CouchCTRL stores its configuration, paired-device tokens, display snapshots, and logs under:
+
+```text
+%LOCALAPPDATA%\CouchControl
+```
+
+It does not store application configuration in the Windows registry. The only CouchCTRL registry value is the optional **Start with Windows** entry.
+
+To reset only the saved settings:
+
+1. Exit CouchCTRL from its notification-area menu.
+2. Open `%LOCALAPPDATA%\CouchControl` in File Explorer.
+3. Rename `config.json` to `config.json.backup`.
+4. Start CouchCTRL and configure it again.
+
+To perform a complete factory reset, exit CouchCTRL and rename the entire `%LOCALAPPDATA%\CouchControl` folder to `CouchControl.backup`. This also resets pairing, saved display snapshots, the operation journal, and local logs. Keep the backup until the new configuration is working.
+
+To remove the optional current-user startup entry, turn off **Start with Windows** in Settings or run:
+
+```powershell
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "CouchControl.Agent" /f
+```
+
+Do not delete the entire Windows `Run` registry key; other applications use it.
+
+### Emergency display recovery
+
+If a failed display switch leaves monitors blank, unavailable, incorrectly scaled, or unusable after CouchCTRL exits, try these safer Windows recovery steps first:
+
+1. Press <kbd>Windows</kbd>+<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd> to reset the graphics driver.
+2. Restart Windows and use <kbd>Windows</kbd>+<kbd>P</kbd> to select a usable display mode.
+3. Disconnect nonessential displays, docks, adapters, and receivers, then reconnect them one at a time.
+4. If necessary, start Windows in Safe Mode and repair or reinstall the display driver.
+
+As a last resort, some systems may recover only after Windows' cached display topology is cleared from:
+
+```text
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\GraphicsDrivers\Configuration
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\GraphicsDrivers\Connectivity
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\GraphicsDrivers\ScaleFactors
+```
+
+> **Registry warning:** These keys belong to Windows, require administrator access, and contain system-wide display configuration for every connected display—not CouchCTRL settings. Deleting them causes Windows to rebuild its display cache and can remove saved monitor positions, modes, and scaling. Editing the wrong registry location can make Windows unstable or unbootable. Back up the `GraphicsDrivers` key or create a System Restore point first. If you are unsure, stop and use Windows or GPU-vendor support.
+
+After backing up, exit CouchCTRL, disconnect nonessential external displays, delete only the three subkeys listed above in Registry Editor, restart Windows, wait for the desktop to finish loading, and reconnect displays one at a time. You will need to configure display arrangement, resolution, refresh rate, scaling, and the CouchCTRL desktop snapshot again.
 
 ### Current Limitations
 
