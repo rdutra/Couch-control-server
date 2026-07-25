@@ -25,6 +25,7 @@ public sealed class SettingsForm : Form
     private readonly TextBox preferredHeightTextBox;
     private readonly TextBox preferredRefreshRateTextBox;
     private readonly TextBox steamExecutablePathTextBox;
+    private readonly TextBox heroicExecutablePathTextBox;
     private readonly TextBox apiPortTextBox;
     private readonly TextBox corsOriginsTextBox;
     private readonly TextBox apiTokenTextBox;
@@ -37,7 +38,7 @@ public sealed class SettingsForm : Form
     private readonly TextBox desktopAudioCommandTextBox;
     private readonly Label snapshotStatusValue;
     private readonly Label firewallRuleStatusValue;
-    private readonly CheckBox launchSteamCheckBox;
+    private readonly ComboBox couchLauncherComboBox;
     private readonly CheckBox automaticRecoveryCheckBox;
     private readonly CheckBox startWithWindowsCheckBox;
     private readonly ListView pairedDevicesListView;
@@ -138,16 +139,16 @@ public sealed class SettingsForm : Form
         tabs.TabPages.Add(CreateTabPage("Audio", audioLayout));
 
         var appsLayout = CreateTabLayout();
-        steamExecutablePathTextBox = AddTextRow(appsLayout, 0, "Steam path override");
-        AddHelpText(appsLayout, 1, "Leave this empty to use the detected Steam installation.");
-
-        launchSteamCheckBox = new CheckBox
-        {
-            Text = "Launch Steam automatically",
-            AutoSize = true,
-            Margin = new Padding(0, 8, 0, 0)
-        };
-        appsLayout.Controls.Add(launchSteamCheckBox, 1, 2);
+        couchLauncherComboBox = AddComboRow(appsLayout, 0, "Couch launcher");
+        couchLauncherComboBox.Items.AddRange(
+        [
+            "None",
+            "Steam — Big Picture",
+            "Heroic — Console Mode"
+        ]);
+        steamExecutablePathTextBox = AddTextRow(appsLayout, 1, "Steam path override");
+        heroicExecutablePathTextBox = AddTextRow(appsLayout, 2, "Heroic path override");
+        AddHelpText(appsLayout, 3, "Leave paths empty to detect installed launchers automatically.");
         tabs.TabPages.Add(CreateTabPage("Apps", appsLayout));
 
         var networkLayout = CreateTabLayout();
@@ -324,6 +325,7 @@ public sealed class SettingsForm : Form
             preferredHeightTextBox.Text = configuration.PreferredCouchHeight.ToString();
             preferredRefreshRateTextBox.Text = configuration.PreferredCouchRefreshRateHz.ToString("0.##");
             steamExecutablePathTextBox.Text = configuration.SteamExecutablePath ?? string.Empty;
+            heroicExecutablePathTextBox.Text = configuration.HeroicExecutablePath ?? string.Empty;
             apiPortTextBox.Text = configuration.ApiPort.ToString();
             LoadListeningInterfaceOptions(configuration.ApiListeningInterfaceId);
             await LoadAudioDeviceOptionsAsync(configuration.CouchAudioDeviceId, configuration.DesktopAudioDeviceId);
@@ -335,7 +337,7 @@ public sealed class SettingsForm : Form
             corsOriginsTextBox.Text = string.Join(", ", configuration.CorsAllowedOrigins);
             apiTokenTextBox.Text = await apiTokenStore.GetTokenAsync();
             firewallRuleStatusValue.Text = "Not checked";
-            launchSteamCheckBox.Checked = configuration.LaunchSteamAutomatically;
+            couchLauncherComboBox.SelectedIndex = (int)configuration.CouchLauncher;
             automaticRecoveryCheckBox.Checked = configuration.AutomaticallyRecoverInterruptedDisplayOperations;
             startWithWindowsCheckBox.Checked = startupRegistration.IsEnabled(ApplicationName);
             await LoadPairedDevicesAsync();
@@ -360,9 +362,11 @@ public sealed class SettingsForm : Form
                 PreferredCouchWidth = ParsePositiveInt(preferredWidthTextBox, configuration.PreferredCouchWidth),
                 PreferredCouchHeight = ParsePositiveInt(preferredHeightTextBox, configuration.PreferredCouchHeight),
                 PreferredCouchRefreshRateHz = ParsePositiveDecimal(preferredRefreshRateTextBox, configuration.PreferredCouchRefreshRateHz),
-                LaunchSteamAutomatically = launchSteamCheckBox.Checked,
+                CouchLauncher = (CouchLauncher)Math.Max(0, couchLauncherComboBox.SelectedIndex),
+                LaunchSteamAutomatically = couchLauncherComboBox.SelectedIndex == (int)CouchLauncher.SteamBigPicture,
                 AutomaticallyRecoverInterruptedDisplayOperations = automaticRecoveryCheckBox.Checked,
                 SteamExecutablePath = ParseOptionalText(steamExecutablePathTextBox),
+                HeroicExecutablePath = ParseOptionalText(heroicExecutablePathTextBox),
                 TvPreparationCommand = ParseOptionalText(tvPreparationCommandTextBox),
                 TvPreparationDelayMs = ParseNonNegativeInt(tvPreparationDelayTextBox, configuration.TvPreparationDelayMs),
                 CouchAudioCommand = ParseOptionalText(couchAudioCommandTextBox),
@@ -391,7 +395,8 @@ public sealed class SettingsForm : Form
         preferredHeightTextBox.Enabled = false;
         preferredRefreshRateTextBox.Enabled = false;
         steamExecutablePathTextBox.Enabled = false;
-        launchSteamCheckBox.Enabled = false;
+        heroicExecutablePathTextBox.Enabled = false;
+        couchLauncherComboBox.Enabled = false;
         automaticRecoveryCheckBox.Enabled = false;
         startWithWindowsCheckBox.Enabled = false;
         apiPortTextBox.Enabled = false;
@@ -426,7 +431,8 @@ public sealed class SettingsForm : Form
             preferredHeightTextBox.Enabled = true;
             preferredRefreshRateTextBox.Enabled = true;
             steamExecutablePathTextBox.Enabled = true;
-            launchSteamCheckBox.Enabled = true;
+            heroicExecutablePathTextBox.Enabled = true;
+            couchLauncherComboBox.Enabled = true;
             automaticRecoveryCheckBox.Enabled = true;
             startWithWindowsCheckBox.Enabled = true;
             apiPortTextBox.Enabled = true;

@@ -109,7 +109,7 @@ public sealed class AgentStatusService : IAgentStatusService
             ProfileOperationStep.CapturingSnapshot => "Capturing snapshot",
             ProfileOperationStep.PersistingSnapshot => "Persisting snapshot",
             ProfileOperationStep.ActivatingDisplay => "Activating display",
-            ProfileOperationStep.LaunchingSteam => "Launching Steam",
+            ProfileOperationStep.LaunchingLauncher => "Launching game launcher",
             ProfileOperationStep.LoadingSnapshot => "Loading snapshot",
             ProfileOperationStep.RestoringDesktop => "Restoring desktop",
             _ => "Working"

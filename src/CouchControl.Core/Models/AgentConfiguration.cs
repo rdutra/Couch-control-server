@@ -20,7 +20,11 @@ public sealed record AgentConfiguration
 
     public bool LaunchSteamAutomatically { get; init; } = true;
 
+    public CouchLauncher CouchLauncher { get; init; } = CouchLauncher.SteamBigPicture;
+
     public string? SteamExecutablePath { get; init; }
+
+    public string? HeroicExecutablePath { get; init; }
 
     public string? TvPreparationCommand { get; init; }
 
@@ -64,6 +68,16 @@ public sealed record AgentConfiguration
         if (SteamExecutablePath is { Length: > 0 } path && string.IsNullOrWhiteSpace(path))
         {
             return OperationResult.Failure("Steam executable path cannot be whitespace.", "invalid_steam_path");
+        }
+
+        if (!Enum.IsDefined(CouchLauncher))
+        {
+            return OperationResult.Failure("Couch launcher selection is invalid.", "invalid_couch_launcher");
+        }
+
+        if (HeroicExecutablePath is { Length: > 0 } heroicPath && string.IsNullOrWhiteSpace(heroicPath))
+        {
+            return OperationResult.Failure("Heroic executable path cannot be whitespace.", "invalid_heroic_path");
         }
 
         if (TvPreparationCommand is { Length: > 0 } tvPreparationCommand &&

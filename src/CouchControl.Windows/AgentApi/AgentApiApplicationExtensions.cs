@@ -51,6 +51,8 @@ public static class AgentApiApplicationExtensions
 
         protectedApi.MapGet("/status", GetStatusAsync);
         protectedApi.MapGet("/displays", GetDisplaysAsync);
+        protectedApi.MapGet("/launchers", GetLaunchersAsync);
+        protectedApi.MapPut("/launchers/selected", SetSelectedLauncherAsync);
         protectedApi.MapPost("/modes/couch", StartCouchModeAsync);
         protectedApi.MapPost("/modes/desktop", StartDesktopModeAsync);
         protectedApi.MapPost("/input/mouse", SendMouseInput);
@@ -128,6 +130,74 @@ public static class AgentApiApplicationExtensions
                     display.CurrentMode.RefreshRateHz),
             display.OutputTechnology ?? "Unknown")));
     }
+
+    private static async Task<IResult> GetLaunchersAsync(
+        IAgentConfigurationStore configurationStore,
+        ISteamLauncher launcherService,
+        CancellationToken cancellationToken)
+    {
+        var configuration = await configurationStore.LoadAsync(cancellationToken);
+        return Results.Ok(CreateLauncherSettings(configuration, launcherService));
+    }
+
+    private static async Task<IResult> SetSelectedLauncherAsync(
+        LauncherSelectionRequest request,
+        IAgentConfigurationStore configurationStore,
+        ISteamLauncher launcherService,
+        CancellationToken cancellationToken)
+    {
+        if (!TryParseLauncher(request.Launcher, out var launcher))
+        {
+            return Results.BadRequest(new ErrorResponse(
+                "Launcher must be one of: none, steam, heroic."));
+        }
+
+        var configuration = await configurationStore.LoadAsync(cancellationToken);
+        var updatedConfiguration = configuration with
+        {
+            CouchLauncher = launcher,
+            LaunchSteamAutomatically = launcher == CouchLauncher.SteamBigPicture
+        };
+        await configurationStore.SaveAsync(updatedConfiguration, cancellationToken);
+
+        return Results.Ok(CreateLauncherSettings(updatedConfiguration, launcherService));
+    }
+
+    private static LauncherSettingsResponse CreateLauncherSettings(
+        AgentConfiguration configuration,
+        ISteamLauncher launcherService) =>
+        new(
+            ToLauncherValue(configuration.CouchLauncher),
+            [
+                new LauncherOptionResponse("none", "None", true),
+                new LauncherOptionResponse(
+                    "steam",
+                    "Steam — Big Picture",
+                    launcherService.IsInstalled(configuration)),
+                new LauncherOptionResponse(
+                    "heroic",
+                    "Heroic — Console Mode",
+                    launcherService.IsHeroicInstalled(configuration))
+            ]);
+
+    private static bool TryParseLauncher(string? value, out CouchLauncher launcher)
+    {
+        launcher = value?.Trim().ToLowerInvariant() switch
+        {
+            "none" => CouchLauncher.None,
+            "steam" => CouchLauncher.SteamBigPicture,
+            "heroic" => CouchLauncher.HeroicConsole,
+            _ => (CouchLauncher)(-1)
+        };
+        return Enum.IsDefined(launcher);
+    }
+
+    private static string ToLauncherValue(CouchLauncher launcher) => launcher switch
+    {
+        CouchLauncher.SteamBigPicture => "steam",
+        CouchLauncher.HeroicConsole => "heroic",
+        _ => "none"
+    };
 
     private static async Task<IResult> PairAsync(
         PairRequest request,
@@ -452,6 +522,17 @@ public sealed record PairResponse(
     string? MacAddress);
 
 public sealed record OperationAcceptedResponse(bool Accepted, Guid OperationId);
+
+public sealed record LauncherSelectionRequest(string? Launcher);
+
+public sealed record LauncherSettingsResponse(
+    string SelectedLauncher,
+    IReadOnlyList<LauncherOptionResponse> Launchers);
+
+public sealed record LauncherOptionResponse(
+    string Id,
+    string Name,
+    bool Available);
 
 public sealed record StatusResponse(
     string AgentName,

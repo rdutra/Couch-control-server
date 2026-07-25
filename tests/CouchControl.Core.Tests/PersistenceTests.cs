@@ -48,6 +48,8 @@ public class PersistenceTests : IDisposable
             PreferredCouchHeight = 1080,
             PreferredCouchRefreshRateHz = 120,
             LaunchSteamAutomatically = false,
+            CouchLauncher = CouchLauncher.HeroicConsole,
+            HeroicExecutablePath = @"C:\Apps\Heroic\Heroic.exe",
             AutomaticallyRecoverInterruptedDisplayOperations = true,
             TvPreparationCommand = "cec-switch-tv-input",
             TvPreparationDelayMs = 2500,
@@ -78,6 +80,8 @@ public class PersistenceTests : IDisposable
         Assert.Equal(expectedConfig.PreferredCouchHeight, actualConfig.PreferredCouchHeight);
         Assert.Equal(expectedConfig.PreferredCouchRefreshRateHz, actualConfig.PreferredCouchRefreshRateHz);
         Assert.Equal(expectedConfig.LaunchSteamAutomatically, actualConfig.LaunchSteamAutomatically);
+        Assert.Equal(expectedConfig.CouchLauncher, actualConfig.CouchLauncher);
+        Assert.Equal(expectedConfig.HeroicExecutablePath, actualConfig.HeroicExecutablePath);
         Assert.Equal(expectedConfig.AutomaticallyRecoverInterruptedDisplayOperations, actualConfig.AutomaticallyRecoverInterruptedDisplayOperations);
         Assert.Equal(expectedConfig.TvPreparationCommand, actualConfig.TvPreparationCommand);
         Assert.Equal(expectedConfig.TvPreparationDelayMs, actualConfig.TvPreparationDelayMs);

@@ -146,6 +146,26 @@ if (isConfigure)
                 return 1;
             }
             return await HandleSetSteam(host, enabled, isJson, logger);
+        case "set-launcher":
+            int launcherIdx = argsList.IndexOf("--launcher");
+            if (launcherIdx == -1 || launcherIdx + 1 >= argsList.Count)
+            {
+                Console.Error.WriteLine("Error: Missing --launcher argument.");
+                return 1;
+            }
+            var launcher = argsList[launcherIdx + 1].ToLowerInvariant() switch
+            {
+                "none" => CouchLauncher.None,
+                "steam" => CouchLauncher.SteamBigPicture,
+                "heroic" => CouchLauncher.HeroicConsole,
+                _ => (CouchLauncher?)null
+            };
+            if (launcher is null)
+            {
+                Console.Error.WriteLine("Error: --launcher must be none, steam, or heroic.");
+                return 1;
+            }
+            return await HandleSetLauncher(host, launcher.Value, isJson, logger);
         case "set-tv-prep":
             int commandIdx = argsList.IndexOf("--command");
             int delayIdx = argsList.IndexOf("--delay-ms");
@@ -230,6 +250,7 @@ static void PrintConfigureUsage()
     Console.WriteLine("  CouchControl.Cli configure set-tv --display-id \"<stable-id>\"          Set the couch display (TV)");
     Console.WriteLine("  CouchControl.Cli configure set-mode --width W --height H --refresh-rate R   Set the preferred couch mode");
     Console.WriteLine("  CouchControl.Cli configure set-steam --enabled [true|false]          Enable/disable launching Steam automatically");
+    Console.WriteLine("  CouchControl.Cli configure set-launcher --launcher [none|steam|heroic] Select the Couch Mode launcher");
     Console.WriteLine("  CouchControl.Cli configure set-tv-prep [--command \"...\"] [--delay-ms N] Configure the command that prepares the TV/input before couch mode");
     Console.WriteLine("  CouchControl.Cli configure set-couch-audio [--command \"...\"]        Configure the command that switches audio for couch mode");
     Console.WriteLine("  CouchControl.Cli configure set-desktop-audio [--command \"...\"]      Configure the command that switches audio for desktop mode");
@@ -550,7 +571,8 @@ static async Task<int> HandleSetSteam(IHost host, bool enabled, bool isJson, ILo
 
         var updatedConfig = config with
         {
-            LaunchSteamAutomatically = enabled
+            LaunchSteamAutomatically = enabled,
+            CouchLauncher = enabled ? CouchLauncher.SteamBigPicture : CouchLauncher.None
         };
 
         var validation = updatedConfig.Validate();
@@ -576,6 +598,41 @@ static async Task<int> HandleSetSteam(IHost host, bool enabled, bool isJson, ILo
     catch (Exception ex)
     {
         logger.LogError(ex, "Failed to configure Steam settings.");
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        return 1;
+    }
+}
+
+static async Task<int> HandleSetLauncher(
+    IHost host,
+    CouchLauncher launcher,
+    bool isJson,
+    ILogger logger)
+{
+    try
+    {
+        var configStore = host.Services.GetRequiredService<IAgentConfigurationStore>();
+        var config = await configStore.LoadAsync();
+        var updatedConfig = config with
+        {
+            CouchLauncher = launcher,
+            LaunchSteamAutomatically = launcher == CouchLauncher.SteamBigPicture
+        };
+
+        await configStore.SaveAsync(updatedConfig);
+        if (isJson)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(new { Success = true, CouchLauncher = launcher.ToString() }));
+        }
+        else
+        {
+            Console.WriteLine($"Successfully configured Couch Mode launcher: {launcher}");
+        }
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to configure Couch Mode launcher.");
         Console.Error.WriteLine($"Error: {ex.Message}");
         return 1;
     }
@@ -784,7 +841,9 @@ static async Task<int> HandleShow(IHost host, bool isJson, ILogger logger)
         }
         Console.WriteLine($"  Preferred Couch Mode:        {config.PreferredCouchMode}");
         Console.WriteLine($"  Launch Steam Automatically:  {config.LaunchSteamAutomatically}");
+        Console.WriteLine($"  Couch Launcher:              {config.CouchLauncher}");
         Console.WriteLine($"  Steam Executable Path:       {config.SteamExecutablePath ?? "Not configured (will search defaults)"}");
+        Console.WriteLine($"  Heroic Executable Path:      {config.HeroicExecutablePath ?? "Not configured (will search defaults)"}");
         Console.WriteLine($"  TV Preparation Command:      {config.TvPreparationCommand ?? "Not configured"}");
         Console.WriteLine($"  TV Preparation Delay:        {config.TvPreparationDelayMs} ms");
         Console.WriteLine($"  Couch Audio Device:          {config.CouchAudioDeviceName ?? config.CouchAudioDeviceId ?? "Not configured"}");

@@ -13,4 +13,13 @@ public interface ISteamLauncher
 
     Task<OperationResult> ExitBigPictureAsync(
         CancellationToken cancellationToken = default);
+
+    bool IsHeroicInstalled(AgentConfiguration configuration) => false;
+
+    Task<OperationResult> StartHeroicConsoleAsync(
+        AgentConfiguration configuration,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult(OperationResult.Failure(
+            "Heroic Games Launcher is not available.",
+            "heroic_not_installed"));
 }

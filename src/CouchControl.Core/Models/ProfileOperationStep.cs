@@ -9,7 +9,7 @@ public enum ProfileOperationStep
     CapturingSnapshot = 4,
     PersistingSnapshot = 5,
     ActivatingDisplay = 6,
-    LaunchingSteam = 7,
+    LaunchingLauncher = 7,
     LoadingSnapshot = 8,
     RestoringDesktop = 9,
     Completed = 10

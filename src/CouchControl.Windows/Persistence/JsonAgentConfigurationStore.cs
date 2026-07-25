@@ -85,9 +85,13 @@ public sealed class JsonAgentConfigurationStore : IAgentConfigurationStore
 
         public bool LaunchSteamAutomatically { get; init; } = true;
 
+        public CouchLauncher? CouchLauncher { get; init; }
+
         public bool AutomaticallyRecoverInterruptedDisplayOperations { get; init; }
 
         public string? SteamExecutablePath { get; init; }
+
+        public string? HeroicExecutablePath { get; init; }
 
         public string? TvPreparationCommand { get; init; }
 
@@ -123,8 +127,11 @@ public sealed class JsonAgentConfigurationStore : IAgentConfigurationStore
                 PreferredCouchHeight = PreferredCouchMode.Height,
                 PreferredCouchRefreshRateHz = PreferredCouchMode.RefreshRateHz,
                 LaunchSteamAutomatically = LaunchSteamAutomatically,
+                CouchLauncher = CouchLauncher ??
+                    (LaunchSteamAutomatically ? CouchControl.Core.Models.CouchLauncher.SteamBigPicture : CouchControl.Core.Models.CouchLauncher.None),
                 AutomaticallyRecoverInterruptedDisplayOperations = AutomaticallyRecoverInterruptedDisplayOperations,
                 SteamExecutablePath = SteamExecutablePath,
+                HeroicExecutablePath = HeroicExecutablePath,
                 TvPreparationCommand = string.IsNullOrWhiteSpace(TvPreparationCommand)
                     ? null
                     : TvPreparationCommand.Trim(),
@@ -160,6 +167,11 @@ public sealed class JsonAgentConfigurationStore : IAgentConfigurationStore
 
         public static PersistedAgentConfiguration FromDomain(AgentConfiguration configuration)
         {
+            var couchLauncher = configuration.CouchLauncher == CouchControl.Core.Models.CouchLauncher.SteamBigPicture &&
+                                !configuration.LaunchSteamAutomatically
+                ? CouchControl.Core.Models.CouchLauncher.None
+                : configuration.CouchLauncher;
+
             return new PersistedAgentConfiguration
             {
                 SchemaVersion = configuration.SchemaVersion <= 0 ? CurrentSchemaVersion : configuration.SchemaVersion,
@@ -167,9 +179,11 @@ public sealed class JsonAgentConfigurationStore : IAgentConfigurationStore
                 CouchDisplayDevicePath = configuration.CouchDisplayIdentity?.DevicePath ?? configuration.CouchDisplayIdentifier?.Value,
                 CouchDisplay = PersistedCouchDisplayIdentity.FromDomain(configuration.CouchDisplayIdentity),
                 PreferredCouchMode = PersistedDisplayMode.FromDomain(configuration.PreferredCouchMode),
-                LaunchSteamAutomatically = configuration.LaunchSteamAutomatically,
+                LaunchSteamAutomatically = couchLauncher == CouchControl.Core.Models.CouchLauncher.SteamBigPicture,
+                CouchLauncher = couchLauncher,
                 AutomaticallyRecoverInterruptedDisplayOperations = configuration.AutomaticallyRecoverInterruptedDisplayOperations,
                 SteamExecutablePath = configuration.SteamExecutablePath,
+                HeroicExecutablePath = configuration.HeroicExecutablePath,
                 TvPreparationCommand = string.IsNullOrWhiteSpace(configuration.TvPreparationCommand)
                     ? null
                     : configuration.TvPreparationCommand.Trim(),

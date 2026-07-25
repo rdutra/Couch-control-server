@@ -102,6 +102,34 @@ public sealed class ProfileOrchestratorTests
     }
 
     [Fact]
+    public async Task ActivateCouchModeAsync_LaunchesSelectedHeroicConsoleMode()
+    {
+        var targetDisplay = CreateDisplayDevice(@"\\?\DISPLAY#SAM0F8C#1", "Samsung TV", isActive: false);
+        var displayManager = new FakeDisplayManager
+        {
+            ConnectedDisplays = [targetDisplay],
+            SnapshotToCapture = CreateSnapshot(targetDisplay),
+            ActivateOnlyResult = OperationResult.Success("switched")
+        };
+        var configurationStore = new FakeConfigurationStore(CreateConfiguration(targetDisplay) with
+        {
+            CouchLauncher = CouchLauncher.HeroicConsole,
+            LaunchSteamAutomatically = false
+        });
+        var launcher = new FakeSteamLauncher { IsHeroicInstalledResult = true };
+        var orchestrator = CreateOrchestrator(
+            configurationStore,
+            displayManager,
+            new FakeSnapshotStore { LastSnapshot = CreateSnapshot("manual-desktop", targetDisplay) },
+            launcher);
+
+        var result = await orchestrator.ActivateCouchModeAsync();
+
+        Assert.True(result.Succeeded);
+        Assert.True(launcher.HeroicLaunchCalled);
+    }
+
+    [Fact]
     public async Task ActivateCouchModeAsync_FailsWhenConfigurationIsInvalid()
     {
         var displayManager = new FakeDisplayManager
@@ -916,6 +944,10 @@ public sealed class ProfileOrchestratorTests
 
         public OperationResult StartResult { get; init; } = OperationResult.Success("steam launched");
 
+        public bool IsHeroicInstalledResult { get; init; }
+
+        public bool HeroicLaunchCalled { get; private set; }
+
         public bool IsInstalled(AgentConfiguration configuration) => IsInstalledResult;
 
         public bool IsRunning() => false;
@@ -927,5 +959,15 @@ public sealed class ProfileOrchestratorTests
 
         public Task<OperationResult> ExitBigPictureAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(OperationResult.Success("steam exited"));
+
+        public bool IsHeroicInstalled(AgentConfiguration configuration) => IsHeroicInstalledResult;
+
+        public Task<OperationResult> StartHeroicConsoleAsync(
+            AgentConfiguration configuration,
+            CancellationToken cancellationToken = default)
+        {
+            HeroicLaunchCalled = true;
+            return Task.FromResult(OperationResult.Success("heroic launched"));
+        }
     }
 }

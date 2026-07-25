@@ -149,6 +149,47 @@ public sealed class AgentApiIntegrationTests
     }
 
     [Fact]
+    public async Task LauncherSelection_ReturnsRadioOptions_AndPersistsOneSelection()
+    {
+        await using var host = await AgentApiTestHost.StartAsync();
+        host.Client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", host.Token);
+
+        var initial = await host.Client.GetFromJsonAsync<LauncherSettingsResponse>(
+            "/api/v1/launchers");
+        Assert.NotNull(initial);
+        Assert.Equal("none", initial.SelectedLauncher);
+        Assert.Equal(["none", "steam", "heroic"], initial.Launchers.Select(static option => option.Id));
+
+        var response = await host.Client.PutAsJsonAsync(
+            "/api/v1/launchers/selected",
+            new LauncherSelectionRequest("heroic"));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var updated = await response.Content.ReadFromJsonAsync<LauncherSettingsResponse>();
+        Assert.NotNull(updated);
+        Assert.Equal("heroic", updated.SelectedLauncher);
+
+        var reloaded = await host.Client.GetFromJsonAsync<LauncherSettingsResponse>(
+            "/api/v1/launchers");
+        Assert.Equal("heroic", reloaded!.SelectedLauncher);
+    }
+
+    [Fact]
+    public async Task LauncherSelection_RejectsUnknownLauncher()
+    {
+        await using var host = await AgentApiTestHost.StartAsync();
+        host.Client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", host.Token);
+
+        var response = await host.Client.PutAsJsonAsync(
+            "/api/v1/launchers/selected",
+            new LauncherSelectionRequest("both"));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
     public async Task ActivateCouchMode_ReturnsAccepted_AndOperationCanBeFetched()
     {
         await using var host = await AgentApiTestHost.StartAsync(seedDesktopSnapshot: true);
@@ -394,6 +435,7 @@ public sealed class AgentApiIntegrationTests
                 CouchDisplayIdentifier = new DisplayIdentifier(TvPath),
                 CouchDisplayIdentity = new CouchDisplayIdentity(TvPath, "SAMSUNG", "SAM", "735A", "UID33029", "00000000:000135B1", 33029),
                 LaunchSteamAutomatically = false,
+                CouchLauncher = CouchLauncher.None,
                 ApiPort = 47981,
                 CorsAllowedOrigins = ["http://localhost:3000"]
             });

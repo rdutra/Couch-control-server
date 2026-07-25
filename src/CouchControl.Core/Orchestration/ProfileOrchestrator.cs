@@ -224,7 +224,9 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
             var couchAudioResult = await RunPostActivationCommandAsync(AgentMode.Couch, configuration, cancellationToken);
             displayResult = MergePostActivationResult(displayResult, couchAudioResult);
 
-            if (!configuration.LaunchSteamAutomatically)
+            if (configuration.CouchLauncher == CouchLauncher.None ||
+                (configuration.CouchLauncher == CouchLauncher.SteamBigPicture &&
+                 !configuration.LaunchSteamAutomatically))
             {
                 await CompleteJournalAsync(operationId, cancellationToken);
                 return CompleteOperation(
@@ -233,12 +235,12 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
                         ProfileActivationStatus.Success,
                         displayResult,
                         OperationResult.Success(
-                            "Steam launch is disabled in configuration.",
+                            "Automatic game launcher is disabled in configuration.",
                             outcome: "Success",
                             details:
                             [
                                 "Couch Mode display configuration applied",
-                                "Steam launch disabled",
+                                "Game launcher disabled",
                                 "Couch Mode ready"
                             ]),
                         operationId,
@@ -248,8 +250,14 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
                     AgentMode.Couch);
             }
 
-            UpdateStep(ProfileOperationStep.LaunchingSteam);
-            if (!steamLauncher.IsInstalled(configuration))
+            UpdateStep(ProfileOperationStep.LaunchingLauncher);
+            var launcherName = configuration.CouchLauncher == CouchLauncher.HeroicConsole
+                ? "Heroic Games Launcher"
+                : "Steam";
+            var launcherInstalled = configuration.CouchLauncher == CouchLauncher.HeroicConsole
+                ? steamLauncher.IsHeroicInstalled(configuration)
+                : steamLauncher.IsInstalled(configuration);
+            if (!launcherInstalled)
             {
                 await CompleteJournalAsync(operationId, cancellationToken);
                 return CompleteOperation(
@@ -258,13 +266,13 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
                         ProfileActivationStatus.PartialSuccess,
                         displayResult,
                         OperationResult.PartialSuccess(
-                            "Steam is not installed.",
+                            $"{launcherName} is not installed.",
                             outcome: "Partial success",
                             details:
                             [
                                 "Couch Mode display configuration applied",
-                                "Steam installation not found",
-                                "Couch Mode ready without Steam"
+                                $"{launcherName} installation not found",
+                                $"Couch Mode ready without {launcherName}"
                             ]),
                         operationId,
                         startedAt,
@@ -273,7 +281,9 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
                     AgentMode.Couch);
             }
 
-            var steamLaunchResult = await steamLauncher.StartBigPictureAsync(configuration, cancellationToken);
+            var steamLaunchResult = configuration.CouchLauncher == CouchLauncher.HeroicConsole
+                ? await steamLauncher.StartHeroicConsoleAsync(configuration, cancellationToken)
+                : await steamLauncher.StartBigPictureAsync(configuration, cancellationToken);
             var steamResult = WrapSteamResult(steamLaunchResult);
             var activationStatus = steamResult.Succeeded
                 ? ProfileActivationStatus.Success
@@ -396,8 +406,11 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
             {
                 var desktopAudioResult = await RunPostActivationCommandAsync(AgentMode.Desktop, configuration, cancellationToken);
                 displayResult = MergePostActivationResult(displayResult, desktopAudioResult);
-                var steamExitResult = await steamLauncher.ExitBigPictureAsync(cancellationToken);
-                displayResult = MergePostActivationResult(displayResult, steamExitResult);
+                if (configuration.CouchLauncher == CouchLauncher.SteamBigPicture)
+                {
+                    var steamExitResult = await steamLauncher.ExitBigPictureAsync(cancellationToken);
+                    displayResult = MergePostActivationResult(displayResult, steamExitResult);
+                }
             }
 
             var activationStatus = displayResult.Succeeded

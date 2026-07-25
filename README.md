@@ -47,7 +47,7 @@ Open **Settings** from the tray menu:
 - In **Display**, select the couch TV and confirm its resolution and refresh rate.
 - While your normal monitor layout is active, click **Save Current Desktop Snapshot**. This is the layout restored by Desktop Mode.
 - In **Audio**, optionally select the playback devices for Couch Mode and Desktop Mode.
-- In **Apps**, choose whether CouchControl should launch Steam automatically. Leave the Steam path empty to use the detected installation.
+- In **Apps**, choose **None**, **Steam — Big Picture**, or **Heroic — Console Mode**. Leave the executable paths empty to use automatic detection.
 - In **Network**, configure the mobile-app connection if needed. Firewall changes occur only when you click the corresponding firewall button.
 - In **System**, optionally enable **Start with Windows**.
 - Click **Save**.
@@ -58,7 +58,7 @@ If your normal monitor arrangement changes later, save a new desktop snapshot fr
 
 Use the tray menu:
 
-- **Activate Couch Mode** switches to the configured TV, changes audio if configured, and optionally launches Steam in Big Picture.
+- **Activate Couch Mode** switches to the configured TV, changes audio if configured, and optionally launches Steam in Big Picture or Heroic in Console Mode.
 - **Restore Desktop Mode** restores the saved monitor layout and desktop audio device.
 
 The tray menu also provides **Status**, **Network Diagnostics**, **Pair Device**, **Show Configuration Folder**, and **View Logs**.
@@ -357,6 +357,12 @@ Configures whether Steam Big Picture should launch automatically upon entering c
 ```bash
 CouchControl.Cli configure set-steam --enabled true
 ```
+
+To choose any supported launcher explicitly:
+```bash
+CouchControl.Cli configure set-launcher --launcher heroic
+```
+Valid values are `none`, `steam`, and `heroic`.
 
 #### 6. Set Couch Audio Device
 Configures the playback device that should become default in Couch mode:

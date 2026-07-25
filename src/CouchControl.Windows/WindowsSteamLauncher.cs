@@ -51,6 +51,55 @@ public sealed class WindowsSteamLauncher : ISteamLauncher
         return processAdapter.IsProcessRunning("steam");
     }
 
+    public bool IsHeroicInstalled(AgentConfiguration configuration) =>
+        TryResolveHeroicPath(configuration, out _);
+
+    public Task<OperationResult> StartHeroicConsoleAsync(
+        AgentConfiguration configuration,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!TryResolveHeroicPath(configuration, out var heroicPath))
+        {
+            return Task.FromResult(OperationResult.Failure(
+                "Heroic Games Launcher installation was not found.",
+                "heroic_not_installed",
+                outcome: "Failure",
+                details: ["Heroic Games Launcher installation not found"]));
+        }
+
+        try
+        {
+            processAdapter.Start(new ProcessStartInfo
+            {
+                FileName = heroicPath,
+                Arguments = "--console",
+                UseShellExecute = true
+            });
+            return Task.FromResult(OperationResult.Success(
+                "Heroic Console Mode launch requested.",
+                outcome: "Success",
+                details:
+                [
+                    "Heroic Games Launcher installation found",
+                    "Opening Heroic Console Mode"
+                ]));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return Task.FromResult(OperationResult.Failure(
+                $"Failed to launch Heroic Console Mode: {ex.Message}",
+                "heroic_launch_failed",
+                outcome: "Failure",
+                details:
+                [
+                    "Heroic Games Launcher installation found",
+                    $"Heroic launch failed: {ex.Message}"
+                ]));
+        }
+    }
+
     public Task<OperationResult> StartBigPictureAsync(
         AgentConfiguration configuration,
         CancellationToken cancellationToken = default)
@@ -169,6 +218,42 @@ public sealed class WindowsSteamLauncher : ISteamLauncher
 
         steamPath = string.Empty;
         return false;
+    }
+
+    internal bool TryResolveHeroicPath(AgentConfiguration configuration, out string heroicPath)
+    {
+        foreach (var candidate in EnumerateHeroicCandidates(configuration))
+        {
+            if (!string.IsNullOrWhiteSpace(candidate) && fileSystem.FileExists(candidate))
+            {
+                heroicPath = candidate;
+                return true;
+            }
+        }
+
+        heroicPath = string.Empty;
+        return false;
+    }
+
+    private IEnumerable<string?> EnumerateHeroicCandidates(AgentConfiguration configuration)
+    {
+        if (!string.IsNullOrWhiteSpace(configuration.HeroicExecutablePath))
+        {
+            yield return configuration.HeroicExecutablePath;
+        }
+
+        var localAppData = environmentAdapter.GetEnvironmentVariable("LOCALAPPDATA");
+        if (!string.IsNullOrWhiteSpace(localAppData))
+        {
+            yield return Path.Combine(localAppData, "Programs", "heroic", "Heroic.exe");
+            yield return Path.Combine(localAppData, "Programs", "Heroic", "Heroic.exe");
+        }
+
+        var programFiles = environmentAdapter.GetEnvironmentVariable("ProgramFiles");
+        if (!string.IsNullOrWhiteSpace(programFiles))
+        {
+            yield return Path.Combine(programFiles, "Heroic", "Heroic.exe");
+        }
     }
 
     private IEnumerable<string?> EnumerateCandidates(AgentConfiguration configuration)

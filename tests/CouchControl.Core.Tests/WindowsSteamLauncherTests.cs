@@ -99,6 +99,24 @@ public sealed class WindowsSteamLauncherTests
         Assert.True(processAdapter.AltEnterSent);
     }
 
+    [Fact]
+    public async Task StartHeroicConsoleAsync_UsesConsoleArgument()
+    {
+        const string heroicPath = @"C:\Users\Test\AppData\Local\Programs\heroic\Heroic.exe";
+        var processAdapter = new FakeProcessAdapter();
+        var launcher = CreateLauncher(
+            fileSystem: new FakeFileSystem(heroicPath),
+            processAdapter: processAdapter);
+
+        var result = await launcher.StartHeroicConsoleAsync(
+            new AgentConfiguration { HeroicExecutablePath = heroicPath });
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(heroicPath, processAdapter.StartCall!.FileName);
+        Assert.Equal("--console", processAdapter.StartCall.Arguments);
+        Assert.True(processAdapter.StartCall.UseShellExecute);
+    }
+
     private static WindowsSteamLauncher CreateLauncher(
         IFileSystemAdapter? fileSystem = null,
         IProcessAdapter? processAdapter = null,
