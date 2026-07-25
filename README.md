@@ -4,7 +4,7 @@ CouchControl is a Windows-focused companion agent for a gaming PC that can switc
 
 ## Warning
 
-The current couch-mode stage changes the active Windows display topology. Running `CouchControl.Cli couch` can disable your other monitors, move your primary desktop to the configured TV, and temporarily interrupt the local desktop session while Windows applies the new topology and mode.
+Activating Couch Mode changes the active Windows display topology. It can disable your other monitors, move your primary desktop to the configured TV, and temporarily interrupt the local desktop session while Windows applies the new topology and mode. Save your normal desktop layout in the tray app before activating Couch Mode.
 
 ## Architecture
 
@@ -30,17 +30,42 @@ Running in Session 0 would create the wrong execution model for this project:
 
 For that reason, CouchControl runs as a user-session companion agent rather than a background service detached from the active desktop.
 
-## Planned Stages
-
-1. Foundation: solution structure, domain models, interfaces, orchestration boundaries, and tests.
-2. Windows display discovery: enumerate displays, capture snapshots, and model display paths accurately.
-3. Windows mode switching: activate the configured couch display as the only active output and restore the prior desktop snapshot.
-4. Steam integration: detect installation state, launch Big Picture mode, and handle already-running Steam cases.
-5. Persistence and operations: store configuration and snapshots, improve CLI commands, and add diagnostics and logging for real deployments.
-
 ## Quickstart
 
-### 1. Build everything
+### 1. Install and launch CouchControl
+
+Run `CouchControlSetup-win-x64.exe`. When installation finishes, launch CouchControl Agent. CouchControl runs in the Windows notification area; right-click its tray icon to open the menu.
+
+On first launch, CouchControl opens the Settings window and explains the required setup.
+
+### 2. Configure Couch Mode
+
+Open **Settings** from the tray menu:
+
+- In **Display**, select the couch TV and confirm its resolution and refresh rate.
+- While your normal monitor layout is active, click **Save Current Desktop Snapshot**. This is the layout restored by Desktop Mode.
+- In **Audio**, optionally select the playback devices for Couch Mode and Desktop Mode.
+- In **Apps**, choose whether CouchControl should launch Steam automatically. Leave the Steam path empty to use the detected installation.
+- In **Network**, configure the mobile-app connection if needed. Firewall changes occur only when you click the corresponding firewall button.
+- In **System**, optionally enable **Start with Windows**.
+- Click **Save**.
+
+If your normal monitor arrangement changes later, save a new desktop snapshot from **Settings**, **Status**, or the tray menu.
+
+### 3. Switch modes
+
+Use the tray menu:
+
+- **Activate Couch Mode** switches to the configured TV, changes audio if configured, and optionally launches Steam in Big Picture.
+- **Restore Desktop Mode** restores the saved monitor layout and desktop audio device.
+
+The tray menu also provides **Status**, **Network Diagnostics**, **Pair Device**, **Show Configuration Folder**, and **View Logs**.
+
+The CLI is not required for setup or normal operation. It remains available for scripting, diagnostics, JSON output, and dry-run validation.
+
+## Building and Packaging
+
+### Build everything
 
 From the solution root:
 
@@ -48,91 +73,9 @@ From the solution root:
 dotnet build CouchControl.sln
 ```
 
-### 2. Configure the target TV and preferred mode with the CLI
+### Package the Windows installer
 
-List displays:
-
-```bash
-CouchControl.Cli configure list-displays
-```
-
-Save the TV:
-
-```bash
-CouchControl.Cli configure set-tv --display-id "f52d3a7e"
-```
-
-Set the preferred mode:
-
-```bash
-CouchControl.Cli configure set-mode --width 3840 --height 2160 --refresh-rate 60
-```
-
-Optionally control Steam auto-launch:
-
-```bash
-CouchControl.Cli configure set-steam --enabled true
-```
-
-Optionally configure audio devices:
-
-```bash
-CouchControl.Cli configure list-audio-devices
-CouchControl.Cli configure set-couch-audio-device --device-id "your-tv-audio-device-id"
-CouchControl.Cli configure set-desktop-audio-device --device-id "your-desktop-audio-device-id"
-```
-
-Inspect the saved configuration:
-
-```bash
-CouchControl.Cli configure show
-```
-
-### 3. Capture the desktop snapshot manually
-
-Before the first `couch` run, save the desktop layout that `desktop` should restore later:
-
-```bash
-CouchControl.Cli snapshot capture
-```
-
-`couch` now requires an existing saved desktop snapshot and does not overwrite it automatically.
-
-### 4. Validate couch mode once from the CLI
-
-Run a dry run before the first real switch on a machine or TV setup:
-
-```bash
-CouchControl.Cli couch --dry-run
-```
-
-Then perform the real switch:
-
-```bash
-CouchControl.Cli couch
-```
-
-Restore desktop mode on demand:
-
-```bash
-CouchControl.Cli desktop
-```
-
-### 5. Run the tray agent for day-to-day use
-
-After the initial configuration is in place, start `CouchControl.Agent.exe` in the logged-in user's Windows session. The tray menu provides:
-
-- `Activate Couch Mode`
-- `Restore Desktop Mode`
-- `Status`
-- `Settings`
-- `Show Configuration Folder`
-- `View Logs`
-- `Start with Windows`
-
-### 6. Package the Windows installer
-
-Create the Windows x64 MVP package from the repository root:
+Create the Windows x64 package from the repository root:
 
 ```powershell
 .\scripts\publish-win-x64.ps1
@@ -186,7 +129,7 @@ cp packaging/windows/uninstall.ps1 artifacts/win-x64/CouchControl/uninstall.ps1
 cp packaging/windows/README-INSTALL.md artifacts/win-x64/CouchControl/README-INSTALL.md
 cp docs/PRIVACY.md artifacts/win-x64/CouchControl/PRIVACY.md
 cp docs/SUPPORT.md artifacts/win-x64/CouchControl/SUPPORT.md
-printf '1.1.0\n' > artifacts/win-x64/CouchControl/VERSION
+printf '1.1.1\n' > artifacts/win-x64/CouchControl/VERSION
 cd artifacts/win-x64/CouchControl && zip -qry ../CouchControl-win-x64.zip . && cd ../../..
 ./packaging/windows/build-nsis-setup.sh
 ```
@@ -271,154 +214,22 @@ Couch display active
 
 ### Live Testing On Windows
 
-Use this sequence for the first live test on the target PC:
+For a first live test:
 
-#### 1. Build the solution
+1. Arrange your desktop monitors exactly as you want Desktop Mode to restore them.
+2. Start `CouchControl.Agent.exe`. The first-run setup opens automatically if no configuration exists.
+3. In **Settings > Display**, select the TV, confirm the preferred mode, and click **Save Current Desktop Snapshot**.
+4. Optionally configure audio, Steam, networking, pairing, and startup behavior in the other Settings tabs.
+5. Click **Save**, then choose **Activate Couch Mode** from the tray menu.
+6. Confirm that the TV is the only active display and that configured audio and Steam behavior were applied.
+7. Choose **Restore Desktop Mode** and confirm that the saved desktop monitor layout returns.
+8. Use **Status**, **Network Diagnostics**, and **View Logs** from the tray menu if either operation fails.
 
-From the solution root:
+Closing the Settings or Status window does not stop the agent. Starting a second instance reuses the existing tray process.
 
-```bash
-dotnet build CouchControl.sln
-```
+### Current Limitations
 
-The runnable binaries will be produced under:
-
-```text
-src\CouchControl.Cli\bin\Debug\net10.0\
-src\CouchControl.Agent\bin\Debug\net10.0-windows\
-```
-
-On Windows, the CLI and tray agent executables are:
-
-```powershell
-.\src\CouchControl.Cli\bin\Debug\net10.0\CouchControl.Cli.exe
-.\src\CouchControl.Agent\bin\Debug\net10.0-windows\CouchControl.Agent.exe
-```
-
-#### 2. Confirm the TV is visible to Windows
-
-List all connected displays:
-
-```powershell
-.\src\CouchControl.Cli\bin\Debug\net10.0\CouchControl.Cli.exe configure list-displays
-```
-
-Confirm that:
-
-- The TV appears in the list.
-- The friendly name matches the TV you expect.
-- The device path and stable ID stay consistent across repeated runs.
-
-#### 3. Save the TV as the couch target
-
-Use the stable ID from `configure list-displays`:
-
-```powershell
-.\src\CouchControl.Cli\bin\Debug\net10.0\CouchControl.Cli.exe configure set-tv --display-id "f52d3a7e"
-```
-
-#### 4. Set the preferred couch mode
-
-Example for a 4K 60 Hz TV:
-
-```powershell
-.\src\CouchControl.Cli\bin\Debug\net10.0\CouchControl.Cli.exe configure set-mode --width 3840 --height 2160 --refresh-rate 60
-```
-
-#### 5. Inspect the stored configuration
-
-Before switching displays, verify the saved target and preferred mode:
-
-```powershell
-.\src\CouchControl.Cli\bin\Debug\net10.0\CouchControl.Cli.exe configure show
-```
-
-#### 6. Capture the desktop snapshot manually
-
-Save the desktop layout that `desktop` should restore later:
-
-```powershell
-.\src\CouchControl.Cli\bin\Debug\net10.0\CouchControl.Cli.exe snapshot capture
-```
-
-Important:
-
-- `couch` requires this saved snapshot to exist.
-- `couch` does not overwrite the saved desktop snapshot.
-- If you want a different desktop baseline later, run `snapshot capture` again yourself.
-
-#### 7. Run a dry run first
-
-This validates the configured TV match and the native display mode selection without applying `SetDisplayConfig`:
-
-```powershell
-.\src\CouchControl.Cli\bin\Debug\net10.0\CouchControl.Cli.exe couch --dry-run
-```
-
-Use the dry run before every first attempt on a new TV, GPU driver version, cable path, or dock/receiver configuration.
-
-#### 8. Run the real switch
-
-Once dry run succeeds:
-
-```powershell
-.\src\CouchControl.Cli\bin\Debug\net10.0\CouchControl.Cli.exe couch
-```
-
-Expected behavior:
-
-- The saved manual desktop snapshot remains unchanged.
-- The current topology is captured only as a temporary rollback snapshot for the active `couch` run.
-- Windows is switched to TV-only mode using native `SetDisplayConfig`.
-- The configured resolution and refresh rate are applied when a safe supported mode exists.
-- The topology is re-queried and verified after the switch.
-- If switching or verification fails, CouchControl attempts to restore the temporary rollback snapshot captured for that run.
-
-#### 9. Verify the result live
-
-After the command returns:
-
-- The TV should be the only active display.
-- The desktop should be on the TV.
-- Other monitors should be inactive.
-- If Steam auto-launch is enabled, Big Picture should start after the switch succeeds.
-
-You can also re-run display enumeration:
-
-```powershell
-.\src\CouchControl.Cli\bin\Debug\net10.0\CouchControl.Cli.exe displays
-```
-
-#### 10. Check the saved desktop snapshot
-
-The manually saved desktop snapshot can be inspected with:
-
-```powershell
-.\src\CouchControl.Cli\bin\Debug\net10.0\CouchControl.Cli.exe snapshot show
-```
-
-This is useful when diagnosing why later `desktop` restore logic did or did not match the intended baseline.
-
-#### 11. Start the tray agent
-
-Once the CLI configuration is correct, start the tray agent for normal usage:
-
-```powershell
-.\src\CouchControl.Agent\bin\Debug\net10.0-windows\CouchControl.Agent.exe
-```
-
-Expected behavior:
-
-- A notification-area icon appears for `Couch Control`.
-- Closing the status or settings window does not terminate the agent.
-- Starting a second instance reuses the existing tray process instead of creating another icon or host.
-- `Start with Windows` registers the agent for the current user without requiring elevation.
-
-### Current Limitations For Live Testing
-
-- TV selection and preferred display mode are still configured through the CLI.
-- Couch and desktop audio devices can be selected from the tray settings window or through the CLI.
-- `desktop` restores only the snapshot you saved manually with `snapshot capture`; Couch mode no longer refreshes that baseline automatically.
+- Desktop Mode restores the snapshot explicitly saved in the tray app; Couch Mode does not silently replace that baseline.
 - Old rollback snapshot files are pruned automatically; only the saved desktop baseline and the current in-progress rollback snapshot are retained.
 - Rollback is attempted automatically only when the switch or post-switch verification fails during the `couch` operation.
 - If the configured TV is off or HDMI-CEC/input switching does not wake it, `couch` retries the configured TV preparation command once more and then aborts before detaching the active desktop monitor.
@@ -451,9 +262,9 @@ When JSON output is requested, any diagnostic logging is redirected to standard 
 ```
 
 
-### Configuration Management
+### Optional CLI Configuration
 
-CouchControl supports persistent configuration storage in `%LocalAppData%\CouchControl\config.json`. The following commands are available:
+Normal configuration is available through the tray app's Settings window. For scripting or troubleshooting, the CLI can manage the same configuration stored in `%LocalAppData%\CouchControl\config.json`.
 
 #### 1. List Displays with Stable Short IDs
 Lists connected displays along with their 8-character stable deterministic short IDs derived from their device paths:
@@ -529,10 +340,10 @@ CouchControl.Cli configure set-desktop-audio --command "your-audio-switch-comman
 
 ### Snapshot Management
 
-The desktop restore baseline is managed manually.
+The desktop restore baseline can be saved or cleared from the tray menu, Settings window, or Status window. Equivalent CLI commands are available for scripting and troubleshooting.
 
 #### 1. Capture Desktop Snapshot
-Saves the current desktop topology as the baseline that `desktop` should restore later:
+Saves the current desktop topology as the baseline that Desktop Mode restores later:
 ```bash
 CouchControl.Cli snapshot capture
 ```
