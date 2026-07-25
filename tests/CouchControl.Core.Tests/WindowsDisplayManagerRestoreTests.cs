@@ -283,6 +283,81 @@ public sealed class WindowsDisplayManagerRestoreTests
         Assert.Equal(1, displaySystem.CommitDisplaySettingsCallCount);
     }
 
+    [Fact]
+    public async Task RestoreSnapshotAsync_MultipleDisplays_RebuildsLayoutWhenNativeDatabaseIsInvalid()
+    {
+        var adapterId = new LUID { HighPart = 1, LowPart = 1 };
+        var primaryPath = @"\\?\DISPLAY#GBT3406#desktop-primary";
+        var secondaryPath = @"\\?\DISPLAY#DEL4098#desktop-secondary";
+        var tvPath = @"\\?\DISPLAY#SAM735A#couch-tv";
+        var couchState = QueryState.Create(
+            CreateDisplay(adapterId, 0, 10, primaryPath, "PRIMARY", false, 3440, 1440, 0, 0, DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY.DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EXTERNAL),
+            CreateDisplay(adapterId, 1, 11, secondaryPath, "SECONDARY", false, 1920, 1080, 3440, 0, DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY.DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EXTERNAL),
+            CreateDisplay(adapterId, 2, 12, tvPath, "TV", true, 3840, 2160, 0, 0, DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY.DISPLAYCONFIG_OUTPUT_TECHNOLOGY_HDMI));
+        var desktopState = QueryState.Create(
+            CreateDisplay(adapterId, 0, 10, primaryPath, "PRIMARY", true, 3440, 1440, 0, 0, DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY.DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EXTERNAL),
+            CreateDisplay(adapterId, 1, 11, secondaryPath, "SECONDARY", true, 1920, 1080, 3440, 0, DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY.DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EXTERNAL),
+            CreateDisplay(adapterId, 2, 12, tvPath, "TV", false, 3840, 2160, 0, 0, DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY.DISPLAYCONFIG_OUTPUT_TECHNOLOGY_HDMI));
+        var displaySystem = new FakeWindowsDisplaySystem(
+            couchState,
+            desktopState,
+            new Dictionary<string, IReadOnlyList<DisplayMode>>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["DISPLAY1"] = [new DisplayMode(3440, 1440, 100)],
+                ["DISPLAY2"] = [new DisplayMode(1920, 1080, 60)],
+                ["DISPLAY3"] = [new DisplayMode(3840, 2160, 60)]
+            },
+            new Dictionary<(uint AdapterLowPart, uint SourceId), string>
+            {
+                [(adapterId.LowPart, 0)] = "DISPLAY1",
+                [(adapterId.LowPart, 1)] = "DISPLAY2",
+                [(adapterId.LowPart, 2)] = "DISPLAY3"
+            })
+        {
+            ValidateResults = new Queue<int>([87])
+        };
+        var snapshot = new DisplaySnapshot(
+            "desktop",
+            DateTimeOffset.UtcNow,
+            [
+                CreateSnapshotDevice(primaryPath, "PRIMARY", adapterId, 0, 10, true, 3440, 1440, 100),
+                CreateSnapshotDevice(secondaryPath, "SECONDARY", adapterId, 1, 11, false, 1920, 1080, 60)
+            ],
+            [
+                CreateSnapshotPath(primaryPath, adapterId, 0, 10, true, 3440, 1440, 100, 0),
+                CreateSnapshotPath(secondaryPath, adapterId, 1, 11, false, 1920, 1080, 60, 3440)
+            ]);
+        var manager = new WindowsDisplayManager(displaySystem, NullLogger<WindowsDisplayManager>.Instance, skipPlatformCheck: true);
+
+        var result = await manager.RestoreSnapshotAsync(snapshot);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal("multi_display_device_settings", result.Outcome);
+        Assert.Contains("Attempting registry-independent multi-display restoration", result.Details);
+        Assert.Equal(3, displaySystem.ChangeDisplaySettingsExCalls.Count);
+        Assert.Equal("DISPLAY3", displaySystem.ChangeDisplaySettingsExCalls[0].DeviceName);
+        Assert.Equal("DISPLAY1", displaySystem.ChangeDisplaySettingsExCalls[1].DeviceName);
+        Assert.Equal("DISPLAY2", displaySystem.ChangeDisplaySettingsExCalls[2].DeviceName);
+        Assert.Equal(3440, displaySystem.ChangeDisplaySettingsExCalls[2].PositionX);
+        Assert.Equal(1, displaySystem.CommitDisplaySettingsCallCount);
+        Assert.Equal(0, displaySystem.DisplaySwitchExtendCallCount);
+    }
+
+    private static DisplayDevice CreateSnapshotDevice(
+        string path, string name, LUID adapterId, uint sourceId, uint targetId,
+        bool primary, int width, int height, decimal refreshRate) =>
+        new(new DisplayIdentifier(path), name, true, primary, new DisplayMode(width, height, refreshRate),
+            path, adapterId.ToString(), sourceId, targetId, "DisplayPort");
+
+    private static DisplayPathSnapshot CreateSnapshotPath(
+        string path, LUID adapterId, uint sourceId, uint targetId, bool primary,
+        uint width, uint height, uint refreshRate, int positionX) =>
+        new(new DisplayIdentifier(path), adapterId.ToString(), sourceId, targetId, true, primary,
+            new DisplayPoint(positionX, 0), width, height, "32Bpp",
+            new DisplayRefreshRate(refreshRate, 1), "Identity", "Identity", "DisplayPort",
+            new DisplaySourceModeSnapshot(width, height, "32Bpp", new DisplayPoint(positionX, 0)),
+            new DisplayTargetModeSnapshot(new DisplayRefreshRate(refreshRate, 1), width, height, "Progressive"));
+
     private static DisplaySnapshot CreateSnapshot(
         string devicePath,
         string friendlyName,

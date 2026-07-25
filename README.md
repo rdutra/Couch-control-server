@@ -186,7 +186,7 @@ cp packaging/windows/uninstall.ps1 artifacts/win-x64/CouchControl/uninstall.ps1
 cp packaging/windows/README-INSTALL.md artifacts/win-x64/CouchControl/README-INSTALL.md
 cp docs/PRIVACY.md artifacts/win-x64/CouchControl/PRIVACY.md
 cp docs/SUPPORT.md artifacts/win-x64/CouchControl/SUPPORT.md
-printf '0.1.0-mvp\n' > artifacts/win-x64/CouchControl/VERSION
+printf '1.1.0\n' > artifacts/win-x64/CouchControl/VERSION
 cd artifacts/win-x64/CouchControl && zip -qry ../CouchControl-win-x64.zip . && cd ../../..
 ./packaging/windows/build-nsis-setup.sh
 ```

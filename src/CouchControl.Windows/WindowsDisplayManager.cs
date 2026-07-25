@@ -510,6 +510,22 @@ public sealed class WindowsDisplayManager : IDisplayManager
                 }
             }
 
+            if (plan.Matches.Count > 1 && plan.MissingPaths.Count == 0)
+            {
+                var deviceSettingsResult = TryRestoreMultipleDisplaysWithDeviceSettings(
+                    snapshot,
+                    plan,
+                    options.DryRun,
+                    details);
+
+                if (deviceSettingsResult.Succeeded || options.DryRun)
+                {
+                    return deviceSettingsResult;
+                }
+
+                details = MergeDetails(details, deviceSettingsResult.Details);
+            }
+
             return await ExecuteFallbackRecoveryAsync(
                 snapshot,
                 contexts,
@@ -521,6 +537,123 @@ public sealed class WindowsDisplayManager : IDisplayManager
         {
             SwitchSemaphore.Release();
         }
+    }
+
+    private OperationResult TryRestoreMultipleDisplaysWithDeviceSettings(
+        DisplaySnapshot snapshot,
+        RestorePlan plan,
+        bool dryRun,
+        List<string> seedDetails)
+    {
+        var details = new List<string>(seedDetails)
+        {
+            "Attempting registry-independent multi-display restoration"
+        };
+        var targetSourceNames = plan.Matches
+            .Select(static match => match.Context.SourceDeviceName)
+            .Where(static sourceName => !string.IsNullOrWhiteSpace(sourceName))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var currentContexts = BuildDisplayContexts(QueryDisplayConfiguration(NativeMethods.QDC_ALL_PATHS));
+
+        foreach (var context in currentContexts
+                     .Where(context =>
+                         !string.IsNullOrWhiteSpace(context.SourceDeviceName) &&
+                         !targetSourceNames.Contains(context.SourceDeviceName!))
+                     .GroupBy(static context => context.SourceDeviceName!, StringComparer.OrdinalIgnoreCase)
+                     .Select(static group => group.First()))
+        {
+            details.Add($"Detaching {context.FriendlyName}");
+            var detachResult = _displaySystem.ChangeDisplaySettingsEx(
+                context.SourceDeviceName!,
+                CreateDetachedDisplayMode(),
+                NativeMethods.CDS_UPDATEREGISTRY | NativeMethods.CDS_NORESET);
+            if (detachResult != NativeMethods.DISP_CHANGE_SUCCESSFUL)
+            {
+                details.Add($"Detaching {context.FriendlyName} failed with error {detachResult}");
+                return OperationResult.Failure(
+                    $"Desktop snapshot could not be restored while detaching '{context.FriendlyName}'.",
+                    "multi_display_detach_failed",
+                    outcome: "device_settings_failed",
+                    details: details);
+            }
+        }
+
+        foreach (var match in plan.Matches.OrderByDescending(static match => match.SnapshotPath.IsPrimary))
+        {
+            if (string.IsNullOrWhiteSpace(match.Context.SourceDeviceName))
+            {
+                details.Add($"Windows did not expose a source device name for '{match.Context.FriendlyName}'");
+                return OperationResult.Failure(
+                    $"Desktop snapshot could not be restored because '{match.Context.FriendlyName}' has no source device name.",
+                    "multi_display_source_name_unavailable",
+                    outcome: "device_settings_failed",
+                    details: details);
+            }
+
+            if (!TryBuildEnabledDisplaySettings(match.Context, match.SnapshotPath, out var mode, out var buildError))
+            {
+                details.Add(buildError);
+                return OperationResult.Failure(
+                    $"Desktop snapshot could not be restored because '{match.Context.FriendlyName}' could not be configured.",
+                    "multi_display_target_mode_unavailable",
+                    outcome: "device_settings_failed",
+                    details: details);
+            }
+
+            details.Add($"Configuring {match.Context.FriendlyName}{(match.SnapshotPath.IsPrimary ? " as primary display" : string.Empty)}");
+            var flags = NativeMethods.CDS_UPDATEREGISTRY | NativeMethods.CDS_NORESET;
+            if (match.SnapshotPath.IsPrimary)
+            {
+                flags |= NativeMethods.CDS_SET_PRIMARY;
+            }
+
+            var applyResult = _displaySystem.ChangeDisplaySettingsEx(match.Context.SourceDeviceName!, mode, flags);
+            if (applyResult != NativeMethods.DISP_CHANGE_SUCCESSFUL)
+            {
+                details.Add($"Configuring {match.Context.FriendlyName} failed with error {applyResult}");
+                return OperationResult.Failure(
+                    $"Desktop snapshot could not be restored while configuring '{match.Context.FriendlyName}'.",
+                    "multi_display_target_apply_failed",
+                    outcome: "device_settings_failed",
+                    details: details);
+            }
+        }
+
+        if (dryRun)
+        {
+            details.Add("Dry run planned registry-independent multi-display restoration");
+            return OperationResult.Success(
+                $"Dry run validated registry-independent restoration of desktop snapshot {snapshot.SnapshotId}.",
+                outcome: "multi_display_device_settings",
+                details: details);
+        }
+
+        var commitResult = _displaySystem.CommitDisplaySettings();
+        if (commitResult != NativeMethods.DISP_CHANGE_SUCCESSFUL)
+        {
+            details.Add($"Committing registry-independent multi-display restoration failed with error {commitResult}");
+            return OperationResult.Failure(
+                "Desktop snapshot could not be restored while committing the multi-display layout.",
+                "multi_display_commit_failed",
+                outcome: "device_settings_failed",
+                details: details);
+        }
+
+        var verification = VerifyRestoredTopology(snapshot, plan, RestoreAttemptKind.Exact);
+        details.AddRange(verification.Details);
+        if (!verification.Succeeded)
+        {
+            return OperationResult.Failure(
+                verification.Message ?? "Desktop snapshot verification failed.",
+                verification.ErrorCode ?? "multi_display_verification_failed",
+                outcome: "device_settings_failed",
+                details: details);
+        }
+
+        return OperationResult.Success(
+            "Desktop Mode restored",
+            outcome: "multi_display_device_settings",
+            details: details);
     }
 
     private async Task<OperationResult> TryApplyRestoreConfigurationAsync(

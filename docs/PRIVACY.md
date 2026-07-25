@@ -24,6 +24,8 @@ This data is stored under `%LOCALAPPDATA%\CouchControl` on the Windows PC.
 
 CouchCTRL communicates over your local network with the Windows companion. Version 1 is LAN-only and does not require a cloud service for pairing or control.
 
+Remote mouse gestures are sent directly to the paired Windows companion as cursor, click, and scroll commands. They are not stored by the iPhone app or Windows companion.
+
 ## Contact
 
 Support: https://couchctrl.app/support
