@@ -1,5 +1,3 @@
-using System.Collections.ObjectModel;
-using System.Linq;
 using CouchControl.Core.Abstractions;
 using CouchControl.Core.Models;
 using Microsoft.Extensions.Logging;
@@ -76,11 +74,14 @@ public sealed class AgentApiOperationService : IAgentApiOperationService
     {
         lock (gate)
         {
-            return new ReadOnlyCollection<AgentOperationRecord>(
-                operationOrder
-                    .Select(id => operations[id])
-                    .Reverse()
-                    .ToList());
+            var records = new AgentOperationRecord[operationOrder.Count];
+            var node = operationOrder.Last;
+            for (var index = 0; node is not null; index++, node = node.Previous)
+            {
+                records[index] = operations[node.Value];
+            }
+
+            return records;
         }
     }
 

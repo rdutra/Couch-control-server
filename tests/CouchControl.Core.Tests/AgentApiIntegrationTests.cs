@@ -34,6 +34,19 @@ public sealed class AgentApiIntegrationTests
     }
 
     [Fact]
+    public async Task Health_DisablesCaching()
+    {
+        await using var host = await AgentApiTestHost.StartAsync();
+
+        var response = await host.Client.GetAsync("/api/v1/health");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains("no-store", response.Headers.CacheControl?.ToString());
+        Assert.Contains("no-cache", response.Headers.Pragma.ToString());
+        Assert.True(response.Content.Headers.Expires <= DateTimeOffset.UtcNow);
+    }
+
+    [Fact]
     public async Task ProtectedEndpoints_Return401_ForMissingOrInvalidToken()
     {
         await using var host = await AgentApiTestHost.StartAsync();

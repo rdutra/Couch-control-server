@@ -128,7 +128,7 @@ public sealed class JsonAgentConfigurationStore : IAgentConfigurationStore
                 PreferredCouchRefreshRateHz = PreferredCouchMode.RefreshRateHz,
                 LaunchSteamAutomatically = LaunchSteamAutomatically,
                 CouchLauncher = CouchLauncher ??
-                    (LaunchSteamAutomatically ? CouchControl.Core.Models.CouchLauncher.SteamBigPicture : CouchControl.Core.Models.CouchLauncher.None),
+                    CouchControl.Core.Models.CouchLauncher.SteamBigPicture,
                 AutomaticallyRecoverInterruptedDisplayOperations = AutomaticallyRecoverInterruptedDisplayOperations,
                 SteamExecutablePath = SteamExecutablePath,
                 HeroicExecutablePath = HeroicExecutablePath,

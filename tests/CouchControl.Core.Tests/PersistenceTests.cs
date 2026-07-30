@@ -99,6 +99,26 @@ public class PersistenceTests : IDisposable
     }
 
     [Fact]
+    public async Task ConfigurationStore_DefaultsToSteamWhenLauncherIsMissing()
+    {
+        string filePath = Path.Combine(_tempFolder, "legacy-config.json");
+        await File.WriteAllTextAsync(
+            filePath,
+            """
+            {
+              "SchemaVersion": 1,
+              "AgentName": "Legacy Agent",
+              "LaunchSteamAutomatically": false
+            }
+            """);
+
+        var store = new JsonAgentConfigurationStore(filePath);
+        var configuration = await store.LoadAsync();
+
+        Assert.Equal(CouchLauncher.SteamBigPicture, configuration.CouchLauncher);
+    }
+
+    [Fact]
     public async Task DisplaySnapshotStore_SavesAndLoadsSuccessfully()
     {
         // Arrange
@@ -293,8 +313,9 @@ public class PersistenceTests : IDisposable
 
         await store.SaveAsync(snapshot);
         Assert.True(File.Exists(filePath));
-        Assert.Empty(Directory.GetFiles(_tempFolder, "*.json", SearchOption.TopDirectoryOnly)
-            .Where(path => !string.Equals(path, filePath, StringComparison.OrdinalIgnoreCase)));
+        Assert.DoesNotContain(
+            Directory.GetFiles(_tempFolder, "*.json", SearchOption.TopDirectoryOnly),
+            path => !string.Equals(path, filePath, StringComparison.OrdinalIgnoreCase));
 
         await store.ClearAsync();
 

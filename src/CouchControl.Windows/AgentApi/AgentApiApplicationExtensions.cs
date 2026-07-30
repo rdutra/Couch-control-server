@@ -39,6 +39,8 @@ public static class AgentApiApplicationExtensions
 
     public static WebApplication MapCouchControlAgentApi(this WebApplication app)
     {
+        app.UseAgentApiNoStore();
+
         app.MapGet("/api/v1/health", () => Results.Ok(new HealthResponse(true, GetVersion())));
 
         app.UseAgentApiCors();
@@ -461,6 +463,19 @@ internal static class AuthenticatedApiTokenHttpContextExtensions
 
 internal static class AgentApiMiddlewareExtensions
 {
+    public static IApplicationBuilder UseAgentApiNoStore(this IApplicationBuilder app) =>
+        app.Use(async (context, next) =>
+        {
+            if (context.Request.Path.StartsWithSegments("/api/v1"))
+            {
+                context.Response.Headers.CacheControl = "no-store, no-cache, max-age=0";
+                context.Response.Headers.Pragma = "no-cache";
+                context.Response.Headers.Expires = "0";
+            }
+
+            await next();
+        });
+
     public static IApplicationBuilder UseAgentApiRequestLogging(this IApplicationBuilder app) =>
         app.Use(async (context, next) =>
         {
