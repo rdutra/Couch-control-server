@@ -141,24 +141,6 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
                     AgentOperationState.Failed);
             }
 
-            if (!string.IsNullOrWhiteSpace(configuration.TvPreparationCommand))
-            {
-                UpdateStep(ProfileOperationStep.Validating);
-                var preparationResult = await displayManager.PrepareForCouchModeAsync(configuration, cancellationToken);
-                if (!preparationResult.Succeeded)
-                {
-                    return CompleteOperation(
-                        CreateResult(
-                            AgentMode.Couch,
-                            ProfileActivationStatus.Failure,
-                            preparationResult,
-                            null,
-                            operationId,
-                            startedAt),
-                        AgentOperationState.Failed);
-                }
-            }
-
             UpdateStep(ProfileOperationStep.MatchingDisplay);
             var matchedDisplay = await MatchDisplayAsync(configuration, cancellationToken);
 
@@ -219,6 +201,12 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
                         startedAt,
                         snapshot),
                     AgentOperationState.Failed);
+            }
+
+            if (!dryRun && !string.IsNullOrWhiteSpace(configuration.TvPreparationCommand))
+            {
+                var preparationResult = await displayManager.PrepareForCouchModeAsync(configuration, cancellationToken);
+                displayResult = MergeTvPreparationResult(displayResult, preparationResult);
             }
 
             var couchAudioResult = await RunPostActivationCommandAsync(AgentMode.Couch, configuration, cancellationToken);
@@ -309,6 +297,18 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
         {
             CancelOperation(operationId);
             throw;
+        }
+        catch (TvPreparationFailedException ex)
+        {
+            var result = CreateResult(
+                AgentMode.Couch,
+                ProfileActivationStatus.Failure,
+                ex.Result,
+                null,
+                operationId,
+                startedAt);
+
+            return CompleteOperation(result, AgentOperationState.Failed, errorOverride: ex.Result.Message);
         }
         catch (InvalidOperationException ex)
         {
@@ -488,13 +488,17 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
                 var preparationResult = await displayManager.PrepareForCouchModeAsync(configuration, cancellationToken);
                 if (!preparationResult.Succeeded)
                 {
-                    throw new InvalidOperationException(preparationResult.Message);
+                    throw new TvPreparationFailedException(preparationResult);
                 }
 
                 return await MatchConnectedDisplayAsync(configuration, cancellationToken);
             }
         }
         catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (TvPreparationFailedException)
         {
             throw;
         }
@@ -689,6 +693,29 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
             details);
     }
 
+    private static OperationResult MergeTvPreparationResult(
+        OperationResult displayResult,
+        OperationResult preparationResult)
+    {
+        var details = displayResult.Details
+            .Concat(preparationResult.Details)
+            .Append(preparationResult.Message)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        if (preparationResult.Succeeded)
+        {
+            return displayResult.IsPartialSuccess
+                ? OperationResult.PartialSuccess(displayResult.Message, displayResult.Outcome, details)
+                : OperationResult.Success(displayResult.Message, displayResult.Outcome, details);
+        }
+
+        return OperationResult.PartialSuccess(
+            $"{displayResult.Message} TV input preparation did not complete after the PC signal was active.",
+            displayResult.Outcome,
+            details);
+    }
+
     private ProfileActivationResult CreateConcurrentFailureResult(
         AgentMode mode,
         string message,
@@ -851,5 +878,10 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
             activity.Stop();
             activity.Dispose();
         }
+    }
+
+    private sealed class TvPreparationFailedException(OperationResult result) : Exception(result.Message)
+    {
+        public OperationResult Result { get; } = result;
     }
 }

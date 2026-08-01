@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Linq;
+using System.Net;
 using CouchControl.Core.Abstractions;
 using CouchControl.Core.Models;
 using Microsoft.AspNetCore.Builder;
@@ -30,6 +31,7 @@ public static class AgentApiApplicationExtensions
         services.AddSingleton<IWindowsFirewallRuleManager, WindowsFirewallRuleManager>();
         services.AddSingleton<IAgentApiHealthState, AgentApiHealthState>();
         services.AddSingleton<IAgentNetworkDiagnosticsService, AgentNetworkDiagnosticsService>();
+        services.AddSingleton<IAgentMdnsAdvertisementService, AgentMdnsAdvertisementService>();
         services.AddSingleton<AgentApiRuntimeOptionsProvider>();
         services.AddSingleton<IAgentApiOperationService, AgentApiOperationService>();
         services.AddSingleton<IMouseInputService, WindowsMouseInputService>();
@@ -87,12 +89,15 @@ public static class AgentApiApplicationExtensions
         var displays = await displayManager.GetDisplaysAsync(cancellationToken);
         var status = orchestrator.GetStatus();
         var bindingPlan = networkInterfaceProvider.CreateBindingPlan(configuration);
+        var computerName = GetComputerName();
+        var displayAgentName = GetDisplayAgentName(configuration.AgentName, computerName);
 
         bool tvConnected = configuration.CouchDisplayIdentifier is not null &&
             displays.Any(display => display.Identifier.Matches(configuration.CouchDisplayIdentifier));
 
         return Results.Ok(new StatusResponse(
-            configuration.AgentName,
+            displayAgentName,
+            computerName,
             GetVersion(),
             ToModeValue(status.CurrentMode),
             ToOperationValue(status.CurrentOperation, status.State),
@@ -108,6 +113,7 @@ public static class AgentApiApplicationExtensions
             bindingPlan.ListenUrls.FirstOrDefault(),
             bindingPlan.LanIpv4Addresses,
             bindingPlan.LanIpv4SubnetMasks,
+            bindingPlan.PreferredWakeOnLanBroadcastAddress,
             bindingPlan.PreferredWakeOnLanBroadcastAddress,
             bindingPlan.WakeOnLanBroadcastAddresses,
             bindingPlan.MacAddress,
@@ -223,13 +229,16 @@ public static class AgentApiApplicationExtensions
 
         var configuration = await configurationStore.LoadAsync(cancellationToken);
         var bindingPlan = networkInterfaceProvider.CreateBindingPlan(configuration);
+        var computerName = GetComputerName();
         return Results.Ok(new PairResponse(
             result.Token.Token,
-            configuration.AgentName,
+            GetDisplayAgentName(configuration.AgentName, computerName),
+            computerName,
             "v1",
             bindingPlan.ListenUrls.FirstOrDefault(),
             bindingPlan.LanIpv4Addresses,
             bindingPlan.LanIpv4SubnetMasks,
+            bindingPlan.PreferredWakeOnLanBroadcastAddress,
             bindingPlan.PreferredWakeOnLanBroadcastAddress,
             bindingPlan.WakeOnLanBroadcastAddresses,
             bindingPlan.MacAddress));
@@ -349,6 +358,20 @@ public static class AgentApiApplicationExtensions
         var assembly = Assembly.GetEntryAssembly() ?? typeof(AgentApiApplicationExtensions).Assembly;
         return assembly.GetName().Version?.ToString(3) ?? "0.0.0";
     }
+
+    private static string GetComputerName()
+    {
+        var hostName = Dns.GetHostName();
+        return string.IsNullOrWhiteSpace(hostName)
+            ? Environment.MachineName
+            : hostName;
+    }
+
+    private static string GetDisplayAgentName(string agentName, string computerName) =>
+        string.IsNullOrWhiteSpace(agentName) ||
+        string.Equals(agentName, "CouchControl Agent", StringComparison.OrdinalIgnoreCase)
+            ? computerName
+            : agentName;
 
     private static string ToModeValue(AgentMode? mode) =>
         mode switch
@@ -528,10 +551,12 @@ public sealed record MouseInputRequest(
 public sealed record PairResponse(
     string Token,
     string AgentName,
+    string ComputerName,
     string ApiVersion,
     string? AgentBaseUrl,
     IReadOnlyList<string> LanIpv4Addresses,
     IReadOnlyList<string> LanIpv4SubnetMasks,
+    string? BroadcastAddress,
     string? PreferredWakeOnLanBroadcastAddress,
     IReadOnlyList<string> WakeOnLanBroadcastAddresses,
     string? MacAddress);
@@ -551,6 +576,7 @@ public sealed record LauncherOptionResponse(
 
 public sealed record StatusResponse(
     string AgentName,
+    string ComputerName,
     string Version,
     string Mode,
     string Operation,
@@ -564,6 +590,7 @@ public sealed record StatusResponse(
     string? AgentBaseUrl,
     IReadOnlyList<string> LanIpv4Addresses,
     IReadOnlyList<string> LanIpv4SubnetMasks,
+    string? BroadcastAddress,
     string? PreferredWakeOnLanBroadcastAddress,
     IReadOnlyList<string> WakeOnLanBroadcastAddresses,
     string? MacAddress,

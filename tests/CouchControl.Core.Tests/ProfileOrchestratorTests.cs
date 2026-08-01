@@ -250,6 +250,36 @@ public sealed class ProfileOrchestratorTests
     }
 
     [Fact]
+    public async Task ActivateCouchModeAsync_RunsTvPreparationAfterDisplayActivationWhenDisplayIsAlreadyConnected()
+    {
+        var targetDisplay = CreateDisplayDevice(@"\\?\DISPLAY#SAM0F8C#1", "Samsung TV", isActive: false);
+        var displayManager = new FakeDisplayManager
+        {
+            ConnectedDisplays = [targetDisplay],
+            SnapshotToCapture = CreateSnapshot(targetDisplay),
+            ActivateOnlyResult = OperationResult.Success("switched"),
+            PrepareForCouchModeResult = OperationResult.Success("prepared")
+        };
+        var configurationStore = new FakeConfigurationStore(CreateConfiguration(targetDisplay) with
+        {
+            TvPreparationCommand = "cec-switch-tv-input",
+            LaunchSteamAutomatically = false
+        });
+        var orchestrator = CreateOrchestrator(
+            configurationStore,
+            displayManager,
+            new FakeSnapshotStore { LastSnapshot = CreateSnapshot("manual-desktop", targetDisplay) });
+
+        var result = await orchestrator.ActivateCouchModeAsync();
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(1, displayManager.PrepareForCouchModeCallCount);
+        Assert.Equal(
+            ["get-displays", "capture-snapshot", "activate-only", "prepare-tv"],
+            displayManager.Operations);
+    }
+
+    [Fact]
     public async Task ActivateCouchModeAsync_FailsWhenTvPreparationFails()
     {
         var targetDisplay = CreateDisplayDevice(@"\\?\DISPLAY#SAM0F8C#1", "Samsung TV", isActive: false);
@@ -804,10 +834,12 @@ public sealed class ProfileOrchestratorTests
         public int ActivateOnlyCallCount { get; private set; }
         public ActivateOnlyCall? ActivateOnlyCall { get; private set; }
         public DisplaySnapshot? RestoredSnapshot { get; private set; }
+        public List<string> Operations { get; } = [];
 
         public Task<IReadOnlyList<DisplayDevice>> GetDisplaysAsync(CancellationToken cancellationToken = default)
         {
             GetDisplaysCallCount++;
+            Operations.Add("get-displays");
 
             if (ConnectedDisplaysSequence is { Count: > 0 })
             {
@@ -818,13 +850,20 @@ public sealed class ProfileOrchestratorTests
         }
 
         public Task<DisplaySnapshot> CaptureSnapshotAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult(SnapshotToCapture);
+            CaptureSnapshotCoreAsync();
+
+        private Task<DisplaySnapshot> CaptureSnapshotCoreAsync()
+        {
+            Operations.Add("capture-snapshot");
+            return Task.FromResult(SnapshotToCapture);
+        }
 
         public Task<OperationResult> PrepareForCouchModeAsync(
             AgentConfiguration configuration,
             CancellationToken cancellationToken = default)
         {
             PrepareForCouchModeCallCount++;
+            Operations.Add("prepare-tv");
             return Task.FromResult(PrepareForCouchModeResult);
         }
 
@@ -835,6 +874,7 @@ public sealed class ProfileOrchestratorTests
             CancellationToken cancellationToken = default)
         {
             ActivateOnlyCallCount++;
+            Operations.Add("activate-only");
             ActivateOnlyCall = new ActivateOnlyCall(display, preferredMode, dryRun);
 
             if (ActivateOnlyException is not null)
@@ -855,6 +895,7 @@ public sealed class ProfileOrchestratorTests
             RestoreSnapshotOptions? options = null,
             CancellationToken cancellationToken = default)
         {
+            Operations.Add("restore-snapshot");
             RestoredSnapshot = snapshot;
 
             if (RestoreSnapshotException is not null)

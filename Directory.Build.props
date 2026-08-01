@@ -3,10 +3,10 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <VersionPrefix>1.1.1</VersionPrefix>
-    <AssemblyVersion>1.1.1.0</AssemblyVersion>
-    <FileVersion>1.1.1.0</FileVersion>
-    <InformationalVersion>1.1.1</InformationalVersion>
+    <VersionPrefix>1.2.2</VersionPrefix>
+    <AssemblyVersion>1.2.2.0</AssemblyVersion>
+    <FileVersion>1.2.2.0</FileVersion>
+    <InformationalVersion>1.2.2</InformationalVersion>
     <Company>CouchCTRL</Company>
     <Product>CouchCTRL Windows Companion</Product>
     <Authors>CouchCTRL</Authors>

@@ -3,7 +3,7 @@ RequestExecutionLevel user
 
 !define APP_NAME "CouchCTRL Windows Companion"
 !define APP_PUBLISHER "CouchCTRL"
-!define APP_VERSION "1.1.1"
+!define APP_VERSION "1.2.2"
 !define PACKAGE_ROOT "..\..\artifacts\win-x64\CouchControl"
 !define SETUP_OUTPUT "..\..\artifacts\win-x64\CouchControlSetup-win-x64.exe"
 

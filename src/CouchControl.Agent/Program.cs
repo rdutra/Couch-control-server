@@ -39,6 +39,7 @@ AppDomain.CurrentDomain.UnhandledException += (_, eventArgs) =>
 await AgentApiApplicationExtensions.InitializeAgentApiAsync(app.Services);
 var apiOptions = app.Services.GetRequiredService<AgentApiRuntimeOptionsProvider>();
 var apiHealthState = app.Services.GetRequiredService<IAgentApiHealthState>();
+var mdnsAdvertisementService = app.Services.GetRequiredService<IAgentMdnsAdvertisementService>();
 if (apiOptions.BindingPlan.ListenUrls.Count > 0)
 {
     foreach (var listenUrl in apiOptions.BindingPlan.ListenUrls)
@@ -48,6 +49,7 @@ if (apiOptions.BindingPlan.ListenUrls.Count > 0)
 
     await app.StartAsync();
     apiHealthState.MarkListening(apiOptions.BindingPlan.ListenUrls);
+    await mdnsAdvertisementService.StartAsync(apiOptions.BindingPlan);
 }
 else
 {
@@ -65,6 +67,7 @@ finally
 {
     if (app.Urls.Count > 0)
     {
+        await mdnsAdvertisementService.DisposeAsync();
         await app.StopAsync();
     }
 }

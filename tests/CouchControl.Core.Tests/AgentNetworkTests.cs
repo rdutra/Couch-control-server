@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.NetworkInformation;
+using System.Buffers.Binary;
+using System.Text;
 using CouchControl.Core.Models;
 using CouchControl.Windows.AgentApi;
 
@@ -111,6 +113,32 @@ public sealed class AgentNetworkTests
     }
 
     [Fact]
+    public void CreateBindingPlan_UsesSubnetMask_WhenComputingWakeOnLanBroadcastAddress()
+    {
+        var provider = new LocalNetworkInterfaceProvider(new FakeNetworkInterfaceSystem(
+            [
+                new NetworkAdapterSnapshot(
+                    "ethernet",
+                    "Ethernet",
+                    "Intel Ethernet Adapter",
+                    PhysicalAddress.Parse("001122334455"),
+                    NetworkInterfaceType.Ethernet,
+                    true,
+                    7,
+                    [Ipv4("192.168.1.40", "255.255.252.0")])
+            ],
+            [
+                new NetworkProfileSnapshot(7, "Ethernet", NetworkCategory.Private)
+            ]));
+
+        var plan = provider.CreateBindingPlan(new AgentConfiguration { ApiPort = 47981 });
+
+        Assert.Equal(["255.255.252.0"], plan.LanIpv4SubnetMasks);
+        Assert.Equal("192.168.3.255", plan.PreferredWakeOnLanBroadcastAddress);
+        Assert.Equal(["192.168.3.255", "255.255.255.255"], plan.WakeOnLanBroadcastAddresses);
+    }
+
+    [Fact]
     public void FirewallCommandBuilder_GeneratesPrivateTcpRuleCommands()
     {
         var create = FirewallCommandBuilder.BuildCreateCommand("CouchControl Rule", 47981);
@@ -150,6 +178,40 @@ public sealed class AgentNetworkTests
         Assert.Equal("47981", rule.LocalPort);
     }
 
+    [Fact]
+    public void MdnsPacketBuilder_MatchesCouchControlServiceQueries()
+    {
+        var advertisement = new MdnsAdvertisement(
+            "Living Room Gaming PC._couchcontrol._tcp.local.",
+            "couch-pc.local.",
+            47981,
+            IPAddress.Parse("192.168.1.40"),
+            ["api=/api/v1", "version=1"]);
+
+        var query = CreateMdnsQuery(AgentMdnsAdvertisementService.ServiceType, recordType: 12);
+
+        Assert.True(MdnsPacketBuilder.QueryMatches(query, advertisement));
+    }
+
+    [Fact]
+    public void MdnsPacketBuilder_ResponseAdvertisesAgentEndpoint()
+    {
+        var advertisement = new MdnsAdvertisement(
+            "Living Room Gaming PC._couchcontrol._tcp.local.",
+            "couch-pc.local.",
+            47981,
+            IPAddress.Parse("192.168.1.40"),
+            ["api=/api/v1", "version=1"]);
+
+        var response = MdnsPacketBuilder.BuildResponse(advertisement, transactionId: 0);
+        var responseText = Encoding.UTF8.GetString(response);
+
+        Assert.Contains("_couchcontrol", responseText);
+        Assert.Contains("Living Room Gaming PC", responseText);
+        Assert.Contains("api=/api/v1", responseText);
+        Assert.True(ContainsSequence(response, [192, 168, 1, 40]));
+    }
+
     private sealed class FakeNetworkInterfaceSystem(
         IReadOnlyList<NetworkAdapterSnapshot> adapters,
         IReadOnlyList<NetworkProfileSnapshot> profiles) : INetworkInterfaceSystem
@@ -161,4 +223,46 @@ public sealed class AgentNetworkTests
 
     private static NetworkIpv4AddressSnapshot Ipv4(string address, string mask) =>
         new(IPAddress.Parse(address), IPAddress.Parse(mask));
+
+    private static byte[] CreateMdnsQuery(string name, ushort recordType)
+    {
+        using var stream = new MemoryStream();
+        WriteUInt16(stream, 0);
+        WriteUInt16(stream, 0);
+        WriteUInt16(stream, 1);
+        WriteUInt16(stream, 0);
+        WriteUInt16(stream, 0);
+        WriteUInt16(stream, 0);
+        foreach (var label in name.TrimEnd('.').Split('.'))
+        {
+            var bytes = Encoding.UTF8.GetBytes(label);
+            stream.WriteByte((byte)bytes.Length);
+            stream.Write(bytes);
+        }
+
+        stream.WriteByte(0);
+        WriteUInt16(stream, recordType);
+        WriteUInt16(stream, 1);
+        return stream.ToArray();
+    }
+
+    private static void WriteUInt16(MemoryStream stream, ushort value)
+    {
+        Span<byte> buffer = stackalloc byte[2];
+        BinaryPrimitives.WriteUInt16BigEndian(buffer, value);
+        stream.Write(buffer);
+    }
+
+    private static bool ContainsSequence(byte[] source, byte[] expected)
+    {
+        for (var index = 0; index <= source.Length - expected.Length; index++)
+        {
+            if (source.AsSpan(index, expected.Length).SequenceEqual(expected))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 }

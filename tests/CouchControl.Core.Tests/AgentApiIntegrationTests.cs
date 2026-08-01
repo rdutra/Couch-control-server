@@ -71,10 +71,12 @@ public sealed class AgentApiIntegrationTests
         var payload = await pairResponse.Content.ReadFromJsonAsync<PairResponse>();
         Assert.NotNull(payload);
         Assert.Equal("Living Room Gaming PC", payload.AgentName);
+        Assert.False(string.IsNullOrWhiteSpace(payload.ComputerName));
         Assert.Equal("v1", payload.ApiVersion);
         Assert.Equal("http://192.168.1.40:47981", payload.AgentBaseUrl);
         Assert.Equal(["192.168.1.40"], payload.LanIpv4Addresses);
         Assert.Equal(["255.255.255.0"], payload.LanIpv4SubnetMasks);
+        Assert.Equal("192.168.1.255", payload.BroadcastAddress);
         Assert.Equal("192.168.1.255", payload.PreferredWakeOnLanBroadcastAddress);
         Assert.Equal(["192.168.1.255", "255.255.255.255"], payload.WakeOnLanBroadcastAddresses);
         Assert.Equal("00:11:22:33:44:55", payload.MacAddress);
@@ -141,6 +143,7 @@ public sealed class AgentApiIntegrationTests
         var status = await host.Client.GetFromJsonAsync<StatusResponse>("/api/v1/status");
         Assert.NotNull(status);
         Assert.Equal("Living Room Gaming PC", status.AgentName);
+        Assert.False(string.IsNullOrWhiteSpace(status.ComputerName));
         Assert.False(string.IsNullOrWhiteSpace(status.Version));
         Assert.Equal("desktop", status.Mode);
         Assert.Equal("idle", status.Operation);
@@ -150,6 +153,7 @@ public sealed class AgentApiIntegrationTests
         Assert.Equal("http://192.168.1.40:47981", status.AgentBaseUrl);
         Assert.Equal(["192.168.1.40"], status.LanIpv4Addresses);
         Assert.Equal(["255.255.255.0"], status.LanIpv4SubnetMasks);
+        Assert.Equal("192.168.1.255", status.BroadcastAddress);
         Assert.Equal("192.168.1.255", status.PreferredWakeOnLanBroadcastAddress);
         Assert.Equal(["192.168.1.255", "255.255.255.255"], status.WakeOnLanBroadcastAddresses);
         Assert.Equal("00:11:22:33:44:55", status.MacAddress);
@@ -159,6 +163,19 @@ public sealed class AgentApiIntegrationTests
         Assert.Equal(2, displays.Count);
         Assert.Contains(displays, static display => display.FriendlyName == "GS34WQC" && display.Primary);
         Assert.Contains(displays, static display => display.FriendlyName == "SAMSUNG");
+    }
+
+    [Fact]
+    public async Task Status_UsesComputerNameWhenAgentNameIsDefaultPlaceholder()
+    {
+        await using var host = await AgentApiTestHost.StartAsync(agentName: "CouchControl Agent");
+        host.Client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", host.Token);
+
+        var status = await host.Client.GetFromJsonAsync<StatusResponse>("/api/v1/status");
+
+        Assert.NotNull(status);
+        Assert.False(string.IsNullOrWhiteSpace(status.ComputerName));
+        Assert.Equal(status.ComputerName, status.AgentName);
     }
 
     [Fact]
@@ -428,6 +445,7 @@ public sealed class AgentApiIntegrationTests
 
         public static async Task<AgentApiTestHost> StartAsync(
             bool seedDesktopSnapshot = false,
+            string agentName = "Living Room Gaming PC",
             TaskCompletionSource? activationGate = null)
         {
             string root = Path.Combine(Path.GetTempPath(), "couchcontrol-agent-api-tests", Guid.NewGuid().ToString("N"));
@@ -444,7 +462,7 @@ public sealed class AgentApiIntegrationTests
             var configStore = new InMemoryAgentConfigurationStore();
             await configStore.SaveAsync(new AgentConfiguration
             {
-                AgentName = "Living Room Gaming PC",
+                AgentName = agentName,
                 CouchDisplayIdentifier = new DisplayIdentifier(TvPath),
                 CouchDisplayIdentity = new CouchDisplayIdentity(TvPath, "SAMSUNG", "SAM", "735A", "UID33029", "00000000:000135B1", 33029),
                 LaunchSteamAutomatically = false,
