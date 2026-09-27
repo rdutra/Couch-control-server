@@ -194,9 +194,11 @@ CouchControl also prunes stale snapshot files automatically. On disk it keeps th
 
 If a couch audio device is configured, Couch mode switches Windows to that playback device after the display switch succeeds. If a desktop audio device is configured, Desktop mode switches Windows back after the desktop display restore succeeds.
 
-If the target TV is currently inactive, `couch` first tries `DisplaySwitch.exe /extend` to wake that HDMI path before disabling the current monitor. If a TV preparation command is configured, CouchControl retries that command and attempts the display switch once more before giving up. If the TV still does not become active, CouchControl aborts the switch and leaves the current desktop display in place.
+If the target TV is currently inactive, `couch` first applies the saved single-display configuration without requiring the TV to be awake. This avoids making HDMI negotiation with a sleeping TV a prerequisite for switching modes. If Windows cannot verify the switch, CouchControl then tries `DisplaySwitch.exe /extend`; if a TV preparation command is configured, it may also retry that command before giving up. Failed switches are rolled back so the current desktop display is left in place.
 
 On most PCs, CouchControl itself cannot generate Nintendo Switch-style HDMI-CEC power-on behavior through the GPU alone. To wake the TV or force the correct input, configure a TV preparation command that calls a utility or integration that your hardware actually supports.
+
+After the first TV-only switch, CouchControl waits for the configured TV settle delay (4 seconds by default) and reapplies the display mode to refresh the HDMI signal. A configured TV preparation command runs before this refresh and may also run during display detection or activation retries. Use a command that sets the desired power and input state rather than toggling it.
 
 To validate the configured TV selection and mode resolution without calling `SetDisplayConfig`, use:
 

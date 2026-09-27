@@ -467,6 +467,7 @@ public sealed class AgentApiIntegrationTests
                 CouchDisplayIdentity = new CouchDisplayIdentity(TvPath, "SAMSUNG", "SAM", "735A", "UID33029", "00000000:000135B1", 33029),
                 LaunchSteamAutomatically = false,
                 CouchLauncher = CouchLauncher.None,
+                TvPreparationDelayMs = 0,
                 ApiPort = 47981,
                 CorsAllowedOrigins = ["http://localhost:3000"]
             });

@@ -133,8 +133,12 @@ public sealed class AgentApiOperationService : IAgentApiOperationService
                     State = MapState(result.Status),
                     StartedAtUtc = result.StartedAtUtc,
                     CompletedAtUtc = result.CompletedAtUtc ?? timeProvider.GetUtcNow(),
-                    Message = result.SteamResult?.Message ?? result.DisplayResult.Message,
-                    ErrorCode = result.SteamResult?.ErrorCode ?? result.DisplayResult.ErrorCode,
+                    Message = result.DisplayResult.IsPartialSuccess || !result.DisplayResult.Succeeded
+                        ? result.DisplayResult.Message
+                        : result.SteamResult?.Message ?? result.DisplayResult.Message,
+                    ErrorCode = result.DisplayResult.IsPartialSuccess || !result.DisplayResult.Succeeded
+                        ? result.DisplayResult.ErrorCode
+                        : result.SteamResult?.ErrorCode ?? result.DisplayResult.ErrorCode,
                     Result = result
                 };
             }

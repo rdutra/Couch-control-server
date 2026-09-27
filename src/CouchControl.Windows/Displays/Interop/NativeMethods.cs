@@ -38,6 +38,7 @@ internal static class NativeMethods
     public const uint CDS_TEST = 0x00000002;
     public const uint CDS_SET_PRIMARY = 0x00000010;
     public const uint CDS_NORESET = 0x10000000;
+    public const uint CDS_RESET = 0x40000000;
     public const int DISP_CHANGE_SUCCESSFUL = 0;
 
     [DllImport("user32.dll", SetLastError = true)]

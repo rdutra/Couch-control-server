@@ -33,6 +33,7 @@ public sealed class ProfileOrchestratorTests
         Assert.Equal(snapshot, await snapshotStore.LoadByIdAsync(snapshot.SnapshotId));
         Assert.NotNull(displayManager.ActivateOnlyCall);
         Assert.Equal(targetDisplay.Identifier, displayManager.ActivateOnlyCall!.Display);
+        Assert.Equal(2, displayManager.ActivateOnlyCallCount);
 
         var status = orchestrator.GetStatus();
         Assert.Equal(AgentOperationState.Succeeded, status.State);
@@ -275,8 +276,104 @@ public sealed class ProfileOrchestratorTests
         Assert.True(result.Succeeded);
         Assert.Equal(1, displayManager.PrepareForCouchModeCallCount);
         Assert.Equal(
-            ["get-displays", "capture-snapshot", "activate-only", "prepare-tv"],
+            ["get-displays", "capture-snapshot", "activate-only", "prepare-tv", "activate-only"],
             displayManager.Operations);
+    }
+
+    [Fact]
+    public async Task ActivateCouchModeAsync_ReportsSignalRefreshFailureAsPartialSuccess()
+    {
+        var targetDisplay = CreateDisplayDevice(@"\\?\DISPLAY#SAM0F8C#1", "Samsung TV", isActive: false);
+        var displayManager = new FakeDisplayManager
+        {
+            ConnectedDisplays = [targetDisplay],
+            SnapshotToCapture = CreateSnapshot(targetDisplay),
+            ActivateOnlyResults = new Queue<OperationResult>(
+            [
+                OperationResult.Success("switched"),
+                OperationResult.Failure("refresh failed", "display_switch_apply_failed")
+            ])
+        };
+        var configurationStore = new FakeConfigurationStore(CreateConfiguration(targetDisplay) with
+        {
+            LaunchSteamAutomatically = false
+        });
+        var orchestrator = CreateOrchestrator(
+            configurationStore,
+            displayManager,
+            new FakeSnapshotStore { LastSnapshot = CreateSnapshot("manual-desktop", targetDisplay) });
+
+        var result = await orchestrator.ActivateCouchModeAsync();
+
+        Assert.Equal(ProfileActivationStatus.PartialSuccess, result.Status);
+        Assert.True(result.DisplayResult.IsPartialSuccess);
+        Assert.Equal(AgentOperationState.PartiallySucceeded, orchestrator.GetStatus().State);
+        Assert.Contains("TV signal refresh failed", orchestrator.GetStatus().LastError);
+    }
+
+    [Fact]
+    public async Task ActivateCouchModeAsync_ReportsPostActivationTvPreparationExceptionAsPartialSuccess()
+    {
+        var targetDisplay = CreateDisplayDevice(@"\\?\DISPLAY#SAM0F8C#1", "Samsung TV", isActive: false);
+        var displayManager = new FakeDisplayManager
+        {
+            ConnectedDisplays = [targetDisplay],
+            SnapshotToCapture = CreateSnapshot(targetDisplay),
+            ActivateOnlyResult = OperationResult.Success("switched"),
+            PrepareForCouchModeException = new InvalidOperationException("CEC unavailable")
+        };
+        var configurationStore = new FakeConfigurationStore(CreateConfiguration(targetDisplay) with
+        {
+            TvPreparationCommand = "cec-switch-tv-input",
+            LaunchSteamAutomatically = false
+        });
+        var orchestrator = CreateOrchestrator(
+            configurationStore,
+            displayManager,
+            new FakeSnapshotStore { LastSnapshot = CreateSnapshot("manual-desktop", targetDisplay) });
+
+        var result = await orchestrator.ActivateCouchModeAsync();
+
+        Assert.Equal(ProfileActivationStatus.PartialSuccess, result.Status);
+        Assert.True(result.DisplayResult.IsPartialSuccess);
+        Assert.Equal(2, displayManager.ActivateOnlyCallCount);
+        Assert.Equal(AgentOperationState.PartiallySucceeded, orchestrator.GetStatus().State);
+        Assert.Contains("TV input preparation did not complete", orchestrator.GetStatus().LastError);
+    }
+
+    [Fact]
+    public async Task ActivateCouchModeAsync_DryRunDoesNotChangeModeOrStartLauncher()
+    {
+        var targetDisplay = CreateDisplayDevice(@"\\?\DISPLAY#SAM0F8C#1", "Samsung TV", isActive: false);
+        var displayManager = new FakeDisplayManager
+        {
+            ConnectedDisplays = [targetDisplay],
+            SnapshotToCapture = CreateSnapshot(targetDisplay)
+        };
+        var configurationStore = new FakeConfigurationStore(CreateConfiguration(targetDisplay) with
+        {
+            CouchLauncher = CouchLauncher.HeroicConsole,
+            TvPreparationCommand = "cec-switch-tv-input"
+        });
+        var launcher = new FakeSteamLauncher { IsHeroicInstalledResult = true };
+        var journalStore = new FakeJournalStore();
+        var orchestrator = CreateOrchestrator(
+            configurationStore,
+            displayManager,
+            new FakeSnapshotStore { LastSnapshot = CreateSnapshot("manual-desktop", targetDisplay) },
+            launcher,
+            journalStore);
+
+        var result = await orchestrator.ActivateCouchModeAsync(dryRun: true);
+
+        Assert.Equal(ProfileActivationStatus.Success, result.Status);
+        Assert.True(displayManager.ActivateOnlyCall?.DryRun == true);
+        Assert.Equal(1, displayManager.ActivateOnlyCallCount);
+        Assert.Equal(0, displayManager.PrepareForCouchModeCallCount);
+        Assert.Equal(["get-displays", "activate-only"], displayManager.Operations);
+        Assert.False(launcher.HeroicLaunchCalled);
+        Assert.Null(journalStore.Journal);
+        Assert.Null(orchestrator.GetStatus().CurrentMode);
     }
 
     [Fact]
@@ -330,7 +427,7 @@ public sealed class ProfileOrchestratorTests
         var result = await orchestrator.ActivateCouchModeAsync();
 
         Assert.True(result.Succeeded);
-        Assert.Equal(2, displayManager.ActivateOnlyCallCount);
+        Assert.Equal(3, displayManager.ActivateOnlyCallCount);
         Assert.Equal(2, displayManager.PrepareForCouchModeCallCount);
     }
 
@@ -362,7 +459,7 @@ public sealed class ProfileOrchestratorTests
         var result = await orchestrator.ActivateCouchModeAsync();
 
         Assert.True(result.Succeeded);
-        Assert.Equal(2, displayManager.ActivateOnlyCallCount);
+        Assert.Equal(3, displayManager.ActivateOnlyCallCount);
         Assert.Equal(2, displayManager.PrepareForCouchModeCallCount);
     }
 
@@ -607,6 +704,7 @@ public sealed class ProfileOrchestratorTests
         Assert.True(result.Succeeded);
         Assert.Equal(ProfileActivationStatus.PartialSuccess, result.Status);
         Assert.Equal("fallback", result.DisplayResult.Outcome);
+        Assert.Null(orchestrator.GetStatus().CurrentMode);
     }
 
     [Fact]
@@ -743,6 +841,7 @@ public sealed class ProfileOrchestratorTests
         return new AgentConfiguration
         {
             CouchDisplayIdentifier = targetDisplay.Identifier,
+            TvPreparationDelayMs = 0,
             CouchDisplayIdentity = new CouchDisplayIdentity(
                 targetDisplay.DevicePath ?? targetDisplay.Identifier.Value,
                 targetDisplay.FriendlyName,
@@ -827,6 +926,7 @@ public sealed class ProfileOrchestratorTests
         public Queue<OperationResult>? ActivateOnlyResults { get; init; }
         public OperationResult RestoreSnapshotResult { get; init; } = OperationResult.Success();
         public OperationResult PrepareForCouchModeResult { get; init; } = OperationResult.Success("prepared");
+        public Exception? PrepareForCouchModeException { get; init; }
         public Exception? ActivateOnlyException { get; init; }
         public Exception? RestoreSnapshotException { get; init; }
         public int GetDisplaysCallCount { get; private set; }
@@ -864,6 +964,11 @@ public sealed class ProfileOrchestratorTests
         {
             PrepareForCouchModeCallCount++;
             Operations.Add("prepare-tv");
+            if (PrepareForCouchModeException is not null)
+            {
+                throw PrepareForCouchModeException;
+            }
+
             return Task.FromResult(PrepareForCouchModeResult);
         }
 

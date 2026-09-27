@@ -218,5 +218,8 @@ public sealed class WindowsDisplayManagerEnumerationTests
 
         public Task<int> RunDisplaySwitchExtendAsync(CancellationToken cancellationToken) =>
             Task.FromResult(0);
+
+        public Task<int> RunDisplaySwitchInternalAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(0);
     }
 }

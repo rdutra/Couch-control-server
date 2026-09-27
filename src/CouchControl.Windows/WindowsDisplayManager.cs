@@ -18,6 +18,7 @@ public sealed class WindowsDisplayManager : IDisplayManager
 {
     private static readonly SemaphoreSlim SwitchSemaphore = new(1, 1);
     private static readonly TimeSpan ExtendFallbackSettleDelay = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan InternalFallbackSettleDelay = TimeSpan.FromSeconds(3);
     private readonly ILogger<WindowsDisplayManager>? _logger;
     private readonly IWindowsDisplaySystem _displaySystem;
     private readonly bool _skipPlatformCheck;
@@ -223,26 +224,8 @@ public sealed class WindowsDisplayManager : IDisplayManager
 
             var details = new List<string>
             {
-                "Attempting explicit single-display activation"
+                "Attempting explicit single-display activation without requiring the target display to be active"
             };
-
-            if (!dryRun && !targetContext.IsActive)
-            {
-                var preActivationResult = await EnsureDisplayIsActiveBeforeSingleDisplayActivationAsync(
-                    display,
-                    details,
-                    cancellationToken);
-
-                if (!preActivationResult.Succeeded)
-                {
-                    return preActivationResult;
-                }
-
-                if (preActivationResult.Details.Count > details.Count)
-                {
-                    details = preActivationResult.Details.ToList();
-                }
-            }
 
             var activationConfiguration = QueryDisplayConfiguration(NativeMethods.QDC_ALL_PATHS);
             var activationContexts = BuildDisplayContexts(activationConfiguration);
@@ -353,54 +336,6 @@ public sealed class WindowsDisplayManager : IDisplayManager
             retryResult.ErrorCode,
             outcome: "single_display_extend_fallback_failed",
             details: retryResult.Details);
-    }
-
-    private async Task<OperationResult> EnsureDisplayIsActiveBeforeSingleDisplayActivationAsync(
-        DisplayIdentifier display,
-        List<string> seedDetails,
-        CancellationToken cancellationToken)
-    {
-        var details = new List<string>(seedDetails)
-        {
-            "Target display is not active yet; attempting DisplaySwitch.exe /extend before single-display activation"
-        };
-
-        cancellationToken.ThrowIfCancellationRequested();
-        var fallbackExitCode = await _displaySystem.RunDisplaySwitchExtendAsync(cancellationToken);
-        details.Add($"DisplaySwitch.exe exited with code {fallbackExitCode}");
-
-        _logger?.LogInformation(
-            "Waiting {DelayMs} ms for the extended topology to settle before checking whether the target display became active.",
-            (int)ExtendFallbackSettleDelay.TotalMilliseconds);
-        await Task.Delay(ExtendFallbackSettleDelay, cancellationToken);
-
-        var extendedConfiguration = QueryDisplayConfiguration(NativeMethods.QDC_ALL_PATHS);
-        var extendedContexts = BuildDisplayContexts(extendedConfiguration);
-        var refreshedTarget = extendedContexts.FirstOrDefault(context => context.Identifier.Matches(display));
-        if (refreshedTarget is null)
-        {
-            return OperationResult.Failure(
-                $"Activation fallback did not leave '{display}' connected.",
-                "display_switch_verification_failed",
-                outcome: "single_display_pre_activation_extend_failed",
-                details: details);
-        }
-
-        if (!refreshedTarget.IsActive)
-        {
-            details.Add($"Aborted single-display activation because '{refreshedTarget.FriendlyName}' is still inactive after extend fallback.");
-            return OperationResult.Failure(
-                $"'{refreshedTarget.FriendlyName}' did not become active after the extend fallback. Leaving the current desktop display unchanged.",
-                "display_target_inactive_after_extend",
-                outcome: "single_display_pre_activation_extend_failed",
-                details: details);
-        }
-
-        details.Add($"Confirmed '{refreshedTarget.FriendlyName}' is active after extend fallback.");
-        return OperationResult.Success(
-            $"Confirmed '{refreshedTarget.FriendlyName}' is active after extend fallback.",
-            outcome: "single_display_pre_activation_extend",
-            details: details);
     }
 
     public async Task<OperationResult> RestoreSnapshotAsync(
@@ -549,6 +484,36 @@ public sealed class WindowsDisplayManager : IDisplayManager
         {
             "Attempting registry-independent multi-display restoration"
         };
+        if (dryRun)
+        {
+            foreach (var match in plan.Matches)
+            {
+                if (string.IsNullOrWhiteSpace(match.Context.SourceDeviceName))
+                {
+                    return OperationResult.Failure(
+                        $"Windows did not expose a source device name for '{match.Context.FriendlyName}'.",
+                        "multi_display_source_name_unavailable",
+                        outcome: "device_settings_failed",
+                        details: details);
+                }
+
+                if (!TryBuildEnabledDisplaySettings(match.Context, match.SnapshotPath, out _, out var buildError))
+                {
+                    return OperationResult.Failure(
+                        buildError,
+                        "multi_display_target_mode_unavailable",
+                        outcome: "device_settings_failed",
+                        details: details);
+                }
+            }
+
+            details.Add("Dry run planned registry-independent multi-display restoration");
+            return OperationResult.Success(
+                $"Dry run validated registry-independent restoration of desktop snapshot {snapshot.SnapshotId}.",
+                outcome: "multi_display_device_settings",
+                details: details);
+        }
+
         var targetSourceNames = plan.Matches
             .Select(static match => match.Context.SourceDeviceName)
             .Where(static sourceName => !string.IsNullOrWhiteSpace(sourceName))
@@ -619,15 +584,6 @@ public sealed class WindowsDisplayManager : IDisplayManager
             }
         }
 
-        if (dryRun)
-        {
-            details.Add("Dry run planned registry-independent multi-display restoration");
-            return OperationResult.Success(
-                $"Dry run validated registry-independent restoration of desktop snapshot {snapshot.SnapshotId}.",
-                outcome: "multi_display_device_settings",
-                details: details);
-        }
-
         var commitResult = _displaySystem.CommitDisplaySettings();
         if (commitResult != NativeMethods.DISP_CHANGE_SUCCESSFUL)
         {
@@ -653,7 +609,7 @@ public sealed class WindowsDisplayManager : IDisplayManager
         return OperationResult.Success(
             "Desktop Mode restored",
             outcome: "multi_display_device_settings",
-            details: details);
+            details: PersistActiveTopologyToDatabase(details));
     }
 
     private async Task<OperationResult> TryApplyRestoreConfigurationAsync(
@@ -791,10 +747,24 @@ public sealed class WindowsDisplayManager : IDisplayManager
             : targetMatch.Context;
 
         var result = TryApplySingleDisplayDeviceSettings(currentContexts, targetContext, targetMatch.SnapshotPath, dryRun, details);
-        if (result.Succeeded || dryRun)
+        if (result.Succeeded)
         {
-            return OperationResult.Success(
+            if (!dryRun)
+            {
+                result = result with
+                {
+                    Details = PersistActiveTopologyToDatabase(result.Details)
+                };
+            }
+
+            return OperationResult.Success(result.Message, result.Outcome, result.Details);
+        }
+
+        if (dryRun)
+        {
+            return OperationResult.Failure(
                 result.Message,
+                result.ErrorCode ?? "single_display_explicit_failed",
                 outcome: result.Outcome,
                 details: result.Details);
         }
@@ -879,6 +849,24 @@ public sealed class WindowsDisplayManager : IDisplayManager
             activeAfterFallback = BuildDisplayContexts(QueryDisplayConfiguration(NativeMethods.QDC_ONLY_ACTIVE_PATHS));
         }
 
+        if (snapshot.Paths.Count(static path => path.IsActive) == 1)
+        {
+            if (singleDisplayRecoveryResult is null)
+            {
+                details.Add("Saved desktop display was not matched after the extended-topology fallback");
+            }
+
+            var internalFallbackResult = await TryRecoverSingleDisplayAfterInternalFallbackAsync(
+                snapshot,
+                details,
+                cancellationToken);
+
+            if (internalFallbackResult is not null)
+            {
+                return internalFallbackResult;
+            }
+        }
+
         if (activeAfterFallback.Any(static context => context.IsActive))
         {
             details.Add("Emergency fallback left at least one display active");
@@ -948,7 +936,7 @@ public sealed class WindowsDisplayManager : IDisplayManager
             return OperationResult.Success(
                 result.Message,
                 outcome: result.Outcome,
-                details: result.Details);
+                details: PersistActiveTopologyToDatabase(result.Details));
         }
 
         return await RecoverAfterFailedRestoreAttemptAsync(
@@ -960,6 +948,105 @@ public sealed class WindowsDisplayManager : IDisplayManager
             result.ErrorCode ?? "single_display_explicit_after_fallback_failed",
             cancellationToken,
             result.Message);
+    }
+
+    private async Task<OperationResult?> TryRecoverSingleDisplayAfterInternalFallbackAsync(
+        DisplaySnapshot snapshot,
+        List<string> seedDetails,
+        CancellationToken cancellationToken)
+    {
+        if (snapshot.Paths.Count(static path => path.IsActive) != 1)
+        {
+            return null;
+        }
+
+        var details = new List<string>(seedDetails)
+        {
+            "Using last-resort recovery: DisplaySwitch.exe /internal"
+        };
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var internalExitCode = await _displaySystem.RunDisplaySwitchInternalAsync(cancellationToken);
+        details.Add($"DisplaySwitch.exe /internal exited with code {internalExitCode}");
+
+        _logger?.LogInformation(
+            "Waiting {DelayMs} ms for the PC-screen-only topology to settle before retrying snapshot restoration.",
+            (int)InternalFallbackSettleDelay.TotalMilliseconds);
+        await Task.Delay(InternalFallbackSettleDelay, cancellationToken);
+
+        var restoreAfterInternalResult = TryRestoreSingleDisplayAfterInternalFallback(
+            snapshot,
+            details,
+            "PC-screen-only recovery");
+        if (restoreAfterInternalResult.Succeeded)
+        {
+            return OperationResult.Success(
+                restoreAfterInternalResult.Message,
+                outcome: "single_display_device_settings_after_internal_fallback",
+                details: PersistActiveTopologyToDatabase(restoreAfterInternalResult.Details));
+        }
+
+        details = MergeDetails(details, restoreAfterInternalResult.Details);
+        var activeAfterInternal = BuildDisplayContexts(QueryDisplayConfiguration(NativeMethods.QDC_ONLY_ACTIVE_PATHS));
+        if (activeAfterInternal.Any(static context => context.IsActive))
+        {
+            details.Add("PC-screen-only recovery left at least one display active");
+            return OperationResult.PartialSuccess(
+                "Desktop snapshot could not be fully restored, but PC-screen-only recovery activated a display.",
+                outcome: "internal_fallback",
+                details: details);
+        }
+
+        details.Add("PC-screen-only recovery left no active display; attempting safe-mode activation");
+        var allContexts = BuildDisplayContexts(QueryDisplayConfiguration(NativeMethods.QDC_ALL_PATHS));
+        details = await EnsureAnyDisplayActiveAfterFailureAsync(
+            BuildRestorePlan(snapshot, allContexts),
+            details,
+            cancellationToken);
+        var finalContexts = BuildDisplayContexts(QueryDisplayConfiguration(NativeMethods.QDC_ALL_PATHS));
+        if (finalContexts.Any(static context => context.IsActive))
+        {
+            details.Add("Safe-mode activation recovered an active display");
+            return OperationResult.PartialSuccess(
+                "Desktop snapshot could not be restored, but a safe display was activated.",
+                outcome: "safe_mode",
+                details: details);
+        }
+
+        return OperationResult.Failure(
+            $"Desktop snapshot {snapshot.SnapshotId} could not be restored after PC-screen-only recovery.",
+            "display_restore_after_internal_fallback_failed",
+            outcome: "internal_fallback_failed",
+            details: details);
+    }
+
+    private DeviceSettingsRestoreResult TryRestoreSingleDisplayAfterInternalFallback(
+        DisplaySnapshot snapshot,
+        List<string> seedDetails,
+        string recoveryLabel)
+    {
+        var details = new List<string>(seedDetails);
+        var currentContexts = BuildDisplayContexts(QueryDisplayConfiguration(NativeMethods.QDC_ALL_PATHS));
+        var snapshotPath = snapshot.Paths.Single(static path => path.IsActive);
+        var snapshotDisplay = snapshot.Displays.FirstOrDefault(display => display.Identifier.Matches(snapshotPath.Identifier));
+        var matchedTarget = MatchSnapshotPath(snapshotPath, snapshotDisplay, currentContexts);
+        if (matchedTarget is not null)
+        {
+            details.Add($"Attempting explicit single-display restoration after {recoveryLabel}");
+            var restoreResult = TryApplySingleDisplayDeviceSettings(
+                currentContexts,
+                matchedTarget,
+                snapshotPath,
+                dryRun: false,
+                details);
+            return restoreResult;
+        }
+
+        details.Add("Saved desktop display was not detected after PC-screen-only recovery");
+        return DeviceSettingsRestoreResult.Failure(
+            "Desktop snapshot could not be restored because the saved desktop display was not detected.",
+            "single_display_target_missing_after_internal_fallback",
+            details);
     }
 
     private async Task<List<string>> EnsureAnyDisplayActiveAfterFailureAsync(
@@ -1081,6 +1168,15 @@ public sealed class WindowsDisplayManager : IDisplayManager
                 details);
         }
 
+        if (dryRun)
+        {
+            details.Add("Dry run planned explicit single-display restore");
+            return DeviceSettingsRestoreResult.Success(
+                "Dry run validated explicit single-display restoration of desktop snapshot.",
+                "single_display_device_settings",
+                details);
+        }
+
         var uniqueSourceNames = contexts
             .Where(static context => !string.IsNullOrWhiteSpace(context.SourceDeviceName))
             .GroupBy(context => context.SourceDeviceName!, StringComparer.OrdinalIgnoreCase)
@@ -1120,15 +1216,6 @@ public sealed class WindowsDisplayManager : IDisplayManager
                 details);
         }
 
-        if (dryRun)
-        {
-            details.Add("Dry run planned explicit single-display restore");
-            return DeviceSettingsRestoreResult.Success(
-                $"Dry run validated explicit single-display restoration of desktop snapshot.",
-                "single_display_device_settings",
-                details);
-        }
-
         var commitResult = _displaySystem.CommitDisplaySettings();
         if (commitResult != NativeMethods.DISP_CHANGE_SUCCESSFUL)
         {
@@ -1153,6 +1240,38 @@ public sealed class WindowsDisplayManager : IDisplayManager
             "Desktop Mode restored",
             "single_display_device_settings",
             details);
+    }
+
+    private IReadOnlyList<string> PersistActiveTopologyToDatabase(IReadOnlyList<string> seedDetails)
+    {
+        var details = seedDetails.ToList();
+        details.Add("Persisting the restored active desktop topology to the Windows display database");
+
+        try
+        {
+            var activeConfiguration = QueryDisplayConfiguration(NativeMethods.QDC_ONLY_ACTIVE_PATHS);
+            var persistResult = ApplyDisplayConfiguration(
+                (activeConfiguration.Paths, activeConfiguration.Modes),
+                validateOnly: false);
+            if (persistResult != 0)
+            {
+                details.Add($"Windows display database persistence failed with error {persistResult}");
+                _logger?.LogWarning(
+                    "Desktop topology was restored, but persisting the active topology to the Windows display database failed with error {Error}.",
+                    persistResult);
+
+                return details;
+            }
+
+            details.Add("Persisted the active desktop topology for the next Windows startup");
+            return details;
+        }
+        catch (Exception ex)
+        {
+            details.Add($"Windows display database persistence threw an exception: {ex.Message}");
+            _logger?.LogWarning(ex, "Desktop topology was restored, but its startup topology could not be persisted.");
+            return details;
+        }
     }
 
     private bool TryBuildEnabledDisplaySettings(
@@ -1394,10 +1513,16 @@ public sealed class WindowsDisplayManager : IDisplayManager
             }
         }
 
-        return candidates.FirstOrDefault(context =>
-            StringComparer.OrdinalIgnoreCase.Equals(context.Path.targetInfo.outputTechnology.ToString(), ParseOutputTechnology(snapshotPath.OutputTechnology).ToString()) &&
-            context.SourceMode?.sourceMode.position.x == snapshotPath.SourceMode?.Position.X &&
-            context.SourceMode?.sourceMode.position.y == snapshotPath.SourceMode?.Position.Y);
+        var topologyMatches = snapshotPath.SourceMode is null
+            ? Array.Empty<DisplayPathContext>()
+            : candidates.Where(context =>
+                context.SourceMode is not null &&
+                StringComparer.OrdinalIgnoreCase.Equals(context.Path.targetInfo.outputTechnology.ToString(), ParseOutputTechnology(snapshotPath.OutputTechnology).ToString()) &&
+                context.SourceMode?.sourceMode.position.x == snapshotPath.SourceMode.Position.X &&
+                context.SourceMode?.sourceMode.position.y == snapshotPath.SourceMode.Position.Y)
+            .ToArray();
+
+        return topologyMatches.Length == 1 ? topologyMatches[0] : null;
     }
 
     private (DISPLAYCONFIG_PATH_INFO[] Paths, DISPLAYCONFIG_MODE_INFO[] Modes)? BuildExactRestoreConfiguration(
@@ -1835,12 +1960,9 @@ public sealed class WindowsDisplayManager : IDisplayManager
     private int ApplyDisplayConfiguration((DISPLAYCONFIG_PATH_INFO[] Paths, DISPLAYCONFIG_MODE_INFO[] Modes) configuration, bool validateOnly)
     {
         var flags = NativeMethods.SDC_USE_SUPPLIED_DISPLAY_CONFIG |
-            NativeMethods.SDC_TOPOLOGY_SUPPLIED |
             NativeMethods.SDC_ALLOW_CHANGES |
-            NativeMethods.SDC_PATH_PERSIST_IF_REQUIRED |
             NativeMethods.SDC_VIRTUAL_MODE_AWARE |
-            NativeMethods.SDC_VIRTUAL_REFRESH_RATE_AWARE |
-            NativeMethods.SDC_ALLOW_PATH_ORDER_CHANGES;
+            NativeMethods.SDC_VIRTUAL_REFRESH_RATE_AWARE;
 
         flags |= validateOnly
             ? NativeMethods.SDC_VALIDATE
@@ -2465,6 +2587,8 @@ public sealed class WindowsDisplayManager : IDisplayManager
         int CommitDisplaySettings();
 
         Task<int> RunDisplaySwitchExtendAsync(CancellationToken cancellationToken);
+
+        Task<int> RunDisplaySwitchInternalAsync(CancellationToken cancellationToken);
     }
 
     private sealed class NativeWindowsDisplaySystem : IWindowsDisplaySystem
@@ -2505,16 +2629,26 @@ public sealed class WindowsDisplayManager : IDisplayManager
             NativeMethods.ChangeDisplaySettingsEx(lpszDeviceName, ref lpDevMode, IntPtr.Zero, dwFlags, IntPtr.Zero);
 
         public int CommitDisplaySettings() =>
-            NativeMethods.ChangeDisplaySettingsEx(null, IntPtr.Zero, IntPtr.Zero, 0, IntPtr.Zero);
+            NativeMethods.ChangeDisplaySettingsEx(null, IntPtr.Zero, IntPtr.Zero, NativeMethods.CDS_RESET, IntPtr.Zero);
 
         public async Task<int> RunDisplaySwitchExtendAsync(CancellationToken cancellationToken)
+        {
+            return await RunDisplaySwitchAsync("/extend", cancellationToken);
+        }
+
+        public async Task<int> RunDisplaySwitchInternalAsync(CancellationToken cancellationToken)
+        {
+            return await RunDisplaySwitchAsync("/internal", cancellationToken);
+        }
+
+        private static async Task<int> RunDisplaySwitchAsync(string arguments, CancellationToken cancellationToken)
         {
             using var process = new Process
             {
                 StartInfo = new ProcessStartInfo
                 {
                     FileName = "DisplaySwitch.exe",
-                    Arguments = "/extend",
+                    Arguments = arguments,
                     UseShellExecute = false,
                     CreateNoWindow = true
                 }

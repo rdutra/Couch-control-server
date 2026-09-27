@@ -105,7 +105,7 @@ public sealed class SettingsForm : Form
         couchDisplayComboBox = AddComboRow(displayLayout, 0, "Couch TV");
         (preferredWidthTextBox, preferredHeightTextBox, preferredRefreshRateTextBox) = AddModeRow(displayLayout, 1, "Couch mode");
         tvPreparationCommandTextBox = AddTextRow(displayLayout, 2, "TV prep command");
-        tvPreparationDelayTextBox = AddTextRow(displayLayout, 3, "TV prep delay ms");
+        tvPreparationDelayTextBox = AddTextRow(displayLayout, 3, "TV settle delay ms");
         snapshotStatusValue = AddReadOnlyRow(displayLayout, 4, "Desktop snapshot");
         var snapshotButtonPanel = new FlowLayoutPanel
         {
@@ -127,7 +127,7 @@ public sealed class SettingsForm : Form
         snapshotButtonPanel.Controls.Add(saveSnapshotButton);
         snapshotButtonPanel.Controls.Add(clearSnapshotButton);
         displayLayout.Controls.Add(snapshotButtonPanel, 1, 5);
-        AddHelpText(displayLayout, 6, "The desktop snapshot is used to restore your normal monitor layout when leaving couch mode.");
+        AddHelpText(displayLayout, 6, "Couch Mode waits for the TV settle delay before refreshing its signal. The desktop snapshot restores your normal monitor layout.");
         tabs.TabPages.Add(CreateTabPage("Display", displayLayout));
 
         var audioLayout = CreateTabLayout();
@@ -136,7 +136,7 @@ public sealed class SettingsForm : Form
         couchAudioCommandTextBox = AddTextRow(audioLayout, 2, "Couch audio cmd");
         desktopAudioCommandTextBox = AddTextRow(audioLayout, 3, "Desktop audio cmd");
         AddHelpText(audioLayout, 4, "Audio commands are optional fallbacks. Device selection is preferred when available.");
-        tabs.TabPages.Add(CreateTabPage("Audio", audioLayout));
+        tabs.TabPages.Add(CreateTabPage("Audio (Experimental)", audioLayout));
 
         var appsLayout = CreateTabLayout();
         couchLauncherComboBox = AddComboRow(appsLayout, 0, "Couch launcher");

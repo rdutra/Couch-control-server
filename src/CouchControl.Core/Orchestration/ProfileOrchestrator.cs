@@ -74,7 +74,7 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
 
         var operationId = Guid.NewGuid();
         var startedAt = GetUtcNow();
-        BeginOperation(operationId, AgentMode.Couch, ProfileOperationType.ActivateCouchMode, startedAt);
+        BeginOperation(operationId, ProfileOperationType.ActivateCouchMode, startedAt);
         using var operationScope = BeginOperationLoggingScope(operationId, ProfileOperationType.ActivateCouchMode);
 
         try
@@ -142,7 +142,7 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
             }
 
             UpdateStep(ProfileOperationStep.MatchingDisplay);
-            var matchedDisplay = await MatchDisplayAsync(configuration, cancellationToken);
+            var matchedDisplay = await MatchDisplayAsync(configuration, !dryRun, cancellationToken);
 
             var lastDesktopSnapshot = await snapshotStore.LoadLastDesktopSnapshotAsync(cancellationToken);
             if (lastDesktopSnapshot is null)
@@ -159,6 +159,29 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
                         operationId,
                         startedAt),
                     AgentOperationState.Failed);
+            }
+
+            if (dryRun)
+            {
+                UpdateStep(ProfileOperationStep.ActivatingDisplay);
+                var validation = await displayManager.ActivateOnlyAsync(
+                    matchedDisplay.Identifier,
+                    configuration.PreferredCouchMode,
+                    dryRun: true,
+                    cancellationToken);
+                var dryRunStatus = validation.Succeeded
+                    ? validation.IsPartialSuccess ? ProfileActivationStatus.PartialSuccess : ProfileActivationStatus.Success
+                    : ProfileActivationStatus.Failure;
+                var dryRunState = dryRunStatus switch
+                {
+                    ProfileActivationStatus.Success => AgentOperationState.Succeeded,
+                    ProfileActivationStatus.PartialSuccess => AgentOperationState.PartiallySucceeded,
+                    _ => AgentOperationState.Failed
+                };
+
+                return CompleteOperation(
+                    CreateResult(AgentMode.Couch, dryRunStatus, validation, null, operationId, startedAt),
+                    dryRunState);
             }
 
             UpdateStep(ProfileOperationStep.CapturingSnapshot);
@@ -203,14 +226,34 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
                     AgentOperationState.Failed);
             }
 
-            if (!dryRun && !string.IsNullOrWhiteSpace(configuration.TvPreparationCommand))
+            if (!string.IsNullOrWhiteSpace(configuration.TvPreparationCommand))
             {
-                var preparationResult = await displayManager.PrepareForCouchModeAsync(configuration, cancellationToken);
+                var preparationResult = await PrepareTvAfterDisplayActivationAsync(configuration, cancellationToken);
                 displayResult = MergeTvPreparationResult(displayResult, preparationResult);
             }
+            else if (configuration.TvPreparationDelayMs > 0)
+            {
+                logger.LogInformation(
+                    "Waiting {DelayMs} ms for the TV input to settle before refreshing the HDMI signal.",
+                    configuration.TvPreparationDelayMs);
+                await Task.Delay(configuration.TvPreparationDelayMs, cancellationToken);
+            }
+
+            logger.LogInformation("Reapplying the Couch Mode display to refresh the HDMI signal.");
+            var signalRefreshResult = await RefreshCouchDisplaySignalAsync(
+                matchedDisplay.Identifier,
+                configuration.PreferredCouchMode,
+                cancellationToken);
+            displayResult = MergeCouchDisplaySignalRefreshResult(displayResult, signalRefreshResult);
 
             var couchAudioResult = await RunPostActivationCommandAsync(AgentMode.Couch, configuration, cancellationToken);
             displayResult = MergePostActivationResult(displayResult, couchAudioResult);
+            var displayStatus = displayResult.IsPartialSuccess
+                ? ProfileActivationStatus.PartialSuccess
+                : ProfileActivationStatus.Success;
+            var displayOperationState = displayResult.IsPartialSuccess
+                ? AgentOperationState.PartiallySucceeded
+                : AgentOperationState.Succeeded;
 
             if (configuration.CouchLauncher == CouchLauncher.None ||
                 (configuration.CouchLauncher == CouchLauncher.SteamBigPicture &&
@@ -220,7 +263,7 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
                 return CompleteOperation(
                     CreateResult(
                         AgentMode.Couch,
-                        ProfileActivationStatus.Success,
+                        displayStatus,
                         displayResult,
                         OperationResult.Success(
                             "Automatic game launcher is disabled in configuration.",
@@ -234,7 +277,7 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
                         operationId,
                         startedAt,
                         snapshot),
-                    AgentOperationState.Succeeded,
+                    displayOperationState,
                     AgentMode.Couch);
             }
 
@@ -273,10 +316,10 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
                 ? await steamLauncher.StartHeroicConsoleAsync(configuration, cancellationToken)
                 : await steamLauncher.StartBigPictureAsync(configuration, cancellationToken);
             var steamResult = WrapSteamResult(steamLaunchResult);
-            var activationStatus = steamResult.Succeeded
+            var activationStatus = steamResult.Succeeded && !displayResult.IsPartialSuccess
                 ? ProfileActivationStatus.Success
                 : ProfileActivationStatus.PartialSuccess;
-            var operationState = steamResult.Succeeded
+            var operationState = activationStatus is ProfileActivationStatus.Success
                 ? AgentOperationState.Succeeded
                 : AgentOperationState.PartiallySucceeded;
 
@@ -362,7 +405,7 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
 
         var operationId = Guid.NewGuid();
         var startedAt = GetUtcNow();
-        BeginOperation(operationId, AgentMode.Desktop, ProfileOperationType.ActivateDesktopMode, startedAt);
+        BeginOperation(operationId, ProfileOperationType.ActivateDesktopMode, startedAt);
         using var operationScope = BeginOperationLoggingScope(operationId, ProfileOperationType.ActivateDesktopMode);
 
         try
@@ -401,8 +444,9 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
                 snapshot,
                 new RestoreSnapshotOptions(dryRun, forceFallback),
                 cancellationToken);
+            var desktopSnapshotRestored = !dryRun && IsDesktopSnapshotRestored(displayResult);
 
-            if (displayResult.Succeeded)
+            if (desktopSnapshotRestored)
             {
                 var desktopAudioResult = await RunPostActivationCommandAsync(AgentMode.Desktop, configuration, cancellationToken);
                 displayResult = MergePostActivationResult(displayResult, desktopAudioResult);
@@ -425,7 +469,7 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
                 _ => AgentOperationState.Failed
             };
 
-            if (recoveringInterruptedOperation && displayResult.Succeeded)
+            if (recoveringInterruptedOperation && desktopSnapshotRestored)
             {
                 await journalStore.SaveAsync(pendingJournal!.MarkRecovered(GetUtcNow()), cancellationToken);
             }
@@ -440,7 +484,7 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
                         startedAt,
                         snapshot),
                 operationState,
-                activationStatus is ProfileActivationStatus.Failure ? null : AgentMode.Desktop);
+                desktopSnapshotRestored ? AgentMode.Desktop : null);
         }
         catch (OperationCanceledException)
         {
@@ -471,6 +515,7 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
 
     private async Task<DisplayDevice> MatchDisplayAsync(
         AgentConfiguration configuration,
+        bool allowTvPreparation,
         CancellationToken cancellationToken)
     {
         try
@@ -479,7 +524,7 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
             {
                 return await MatchConnectedDisplayAsync(configuration, cancellationToken);
             }
-            catch (InvalidOperationException ex) when (!string.IsNullOrWhiteSpace(configuration.TvPreparationCommand))
+            catch (InvalidOperationException ex) when (allowTvPreparation && !string.IsNullOrWhiteSpace(configuration.TvPreparationCommand))
             {
                 logger.LogInformation(
                     ex,
@@ -636,6 +681,59 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
         string.Equals(errorCode, "display_switch_verification_failed", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(errorCode, "display_target_inactive_after_extend", StringComparison.OrdinalIgnoreCase);
 
+    private static bool IsDesktopSnapshotRestored(OperationResult result) =>
+        result.Succeeded &&
+        result.Outcome is not ("fallback" or "internal_fallback" or "safe_mode");
+
+    private async Task<OperationResult> PrepareTvAfterDisplayActivationAsync(
+        AgentConfiguration configuration,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await displayManager.PrepareForCouchModeAsync(configuration, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "TV preparation failed after the Couch Mode display was activated.");
+            return OperationResult.Failure(
+                $"TV preparation failed: {ex.Message}",
+                "tv_preparation_failed",
+                outcome: "Failure");
+        }
+    }
+
+    private async Task<OperationResult> RefreshCouchDisplaySignalAsync(
+        DisplayIdentifier displayIdentifier,
+        DisplayMode preferredMode,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await displayManager.ActivateOnlyAsync(
+                displayIdentifier,
+                preferredMode,
+                dryRun: false,
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not reapply the Couch Mode display to refresh the HDMI signal.");
+            return OperationResult.Failure(
+                $"TV signal refresh failed: {ex.Message}",
+                "tv_signal_refresh_failed",
+                outcome: "Failure");
+        }
+    }
+
     private static OperationResult WrapSteamResult(OperationResult steamLaunchResult)
     {
         var details = new List<string>
@@ -716,6 +814,29 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
             details);
     }
 
+    private static OperationResult MergeCouchDisplaySignalRefreshResult(
+        OperationResult displayResult,
+        OperationResult signalRefreshResult)
+    {
+        var details = displayResult.Details
+            .Concat(signalRefreshResult.Details)
+            .Append(signalRefreshResult.Message)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        if (signalRefreshResult.Succeeded)
+        {
+            return displayResult.IsPartialSuccess
+                ? OperationResult.PartialSuccess(displayResult.Message, displayResult.Outcome, details)
+                : OperationResult.Success(displayResult.Message, displayResult.Outcome, details);
+        }
+
+        return OperationResult.PartialSuccess(
+            $"{displayResult.Message} The TV signal refresh failed.",
+            displayResult.Outcome,
+            details);
+    }
+
     private ProfileActivationResult CreateConcurrentFailureResult(
         AgentMode mode,
         string message,
@@ -777,7 +898,6 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
 
     private void BeginOperation(
         Guid operationId,
-        AgentMode mode,
         ProfileOperationType operationType,
         DateTimeOffset startedAt)
     {
@@ -785,7 +905,7 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
         {
             status = new AgentOperationStatus(
                 operationId,
-                status.CurrentMode ?? mode,
+                status.CurrentMode,
                 operationType,
                 ProfileOperationStep.Validating,
                 AgentOperationState.Validating,
@@ -831,14 +951,16 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
     }
 
     private static OperationResult FinalOperationResult(ProfileActivationResult result) =>
-        result.SteamResult ?? result.DisplayResult;
+        result.DisplayResult.IsPartialSuccess || !result.DisplayResult.Succeeded
+            ? result.DisplayResult
+            : result.SteamResult ?? result.DisplayResult;
 
     private static string? FinalError(ProfileActivationResult result) =>
         result.SteamResult is { Succeeded: false } steamResult
             ? steamResult.Message
-            : result.DisplayResult.Succeeded
-                ? null
-                : result.DisplayResult.Message;
+            : result.DisplayResult.IsPartialSuccess || !result.DisplayResult.Succeeded
+                ? result.DisplayResult.Message
+                : null;
 
     private DateTimeOffset GetUtcNow() => timeProvider.GetUtcNow();
 
