@@ -131,7 +131,7 @@ cp packaging/windows/uninstall.ps1 artifacts/win-x64/CouchControl/uninstall.ps1
 cp packaging/windows/README-INSTALL.md artifacts/win-x64/CouchControl/README-INSTALL.md
 cp docs/PRIVACY.md artifacts/win-x64/CouchControl/PRIVACY.md
 cp docs/SUPPORT.md artifacts/win-x64/CouchControl/SUPPORT.md
-printf '1.1.1\n' > artifacts/win-x64/CouchControl/VERSION
+dotnet msbuild src/CouchControl.Agent/CouchControl.Agent.csproj -getProperty:VersionPrefix > artifacts/win-x64/CouchControl/VERSION
 cd artifacts/win-x64/CouchControl && zip -qry ../CouchControl-win-x64.zip . && cd ../../..
 ./packaging/windows/build-nsis-setup.sh
 ```

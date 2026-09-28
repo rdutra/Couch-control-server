@@ -281,7 +281,7 @@ public sealed class ProfileOrchestratorTests
     }
 
     [Fact]
-    public async Task ActivateCouchModeAsync_ReportsSignalRefreshFailureAsPartialSuccess()
+    public async Task ActivateCouchModeAsync_RollsBackWhenSignalRefreshFailsAndSkipsAudioSwitch()
     {
         var targetDisplay = CreateDisplayDevice(@"\\?\DISPLAY#SAM0F8C#1", "Samsung TV", isActive: false);
         var displayManager = new FakeDisplayManager
@@ -298,17 +298,22 @@ public sealed class ProfileOrchestratorTests
         {
             LaunchSteamAutomatically = false
         });
+        var modeAutomation = new FakeModeAutomationService();
         var orchestrator = CreateOrchestrator(
             configurationStore,
             displayManager,
-            new FakeSnapshotStore { LastSnapshot = CreateSnapshot("manual-desktop", targetDisplay) });
+            new FakeSnapshotStore { LastSnapshot = CreateSnapshot("manual-desktop", targetDisplay) },
+            modeAutomationService: modeAutomation);
 
         var result = await orchestrator.ActivateCouchModeAsync();
 
-        Assert.Equal(ProfileActivationStatus.PartialSuccess, result.Status);
-        Assert.True(result.DisplayResult.IsPartialSuccess);
-        Assert.Equal(AgentOperationState.PartiallySucceeded, orchestrator.GetStatus().State);
+        Assert.Equal(ProfileActivationStatus.Failure, result.Status);
+        Assert.False(result.DisplayResult.Succeeded);
+        Assert.NotNull(result.DisplayResult.RollbackResult);
+        Assert.NotNull(displayManager.RestoredSnapshot);
+        Assert.Equal(AgentOperationState.Failed, orchestrator.GetStatus().State);
         Assert.Contains("TV signal refresh failed", orchestrator.GetStatus().LastError);
+        Assert.Equal(0, modeAutomation.RunPostActivationCallCount);
     }
 
     [Fact]
@@ -822,14 +827,15 @@ public sealed class ProfileOrchestratorTests
         FakeDisplayManager displayManager,
         FakeSnapshotStore snapshotStore,
         FakeSteamLauncher? steamLauncher = null,
-        FakeJournalStore? journalStore = null)
+        FakeJournalStore? journalStore = null,
+        FakeModeAutomationService? modeAutomationService = null)
     {
         return new ProfileOrchestrator(
             configurationStore,
             displayManager,
             new DisplayMatchingService(),
             steamLauncher ?? new FakeSteamLauncher(),
-            new FakeModeAutomationService(),
+            modeAutomationService ?? new FakeModeAutomationService(),
             snapshotStore,
             journalStore ?? new FakeJournalStore(),
             NullLogger<ProfileOrchestrator>.Instance);
@@ -1016,11 +1022,19 @@ public sealed class ProfileOrchestratorTests
     {
         public OperationResult Result { get; init; } = OperationResult.Success("No audio switch command configured.");
 
+        public int RunPostActivationCallCount { get; private set; }
+
         public Task<OperationResult> RunPostActivationAsync(
             AgentMode mode,
             AgentConfiguration configuration,
             CancellationToken cancellationToken = default) =>
-            Task.FromResult(Result);
+            RunPostActivationAsyncCore();
+
+        private Task<OperationResult> RunPostActivationAsyncCore()
+        {
+            RunPostActivationCallCount++;
+            return Task.FromResult(Result);
+        }
     }
 
     private sealed record ActivateOnlyCall(DisplayIdentifier Display, DisplayMode? PreferredMode, bool DryRun);

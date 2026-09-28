@@ -244,6 +244,39 @@ public sealed class ProfileOrchestrator : IProfileOrchestrator
                 matchedDisplay.Identifier,
                 configuration.PreferredCouchMode,
                 cancellationToken);
+            if (!signalRefreshResult.Succeeded)
+            {
+                var signalRefreshFailure = OperationResult.Failure(
+                    $"TV signal refresh failed: {signalRefreshResult.Message}",
+                    signalRefreshResult.ErrorCode ?? "tv_signal_refresh_failed",
+                    outcome: signalRefreshResult.Outcome,
+                    details: displayResult.Details
+                        .Concat(signalRefreshResult.Details)
+                        .Distinct(StringComparer.Ordinal)
+                        .ToArray());
+                var rollbackResult = await EnsureRollbackAsync(
+                    signalRefreshFailure,
+                    snapshot,
+                    dryRun: false,
+                    cancellationToken);
+
+                if (rollbackResult.RollbackResult?.Succeeded == true)
+                {
+                    await CompleteJournalAsync(operationId, cancellationToken);
+                }
+
+                return CompleteOperation(
+                    CreateResult(
+                        AgentMode.Couch,
+                        ProfileActivationStatus.Failure,
+                        rollbackResult,
+                        null,
+                        operationId,
+                        startedAt,
+                        snapshot),
+                    AgentOperationState.Failed);
+            }
+
             displayResult = MergeCouchDisplaySignalRefreshResult(displayResult, signalRefreshResult);
 
             var couchAudioResult = await RunPostActivationCommandAsync(AgentMode.Couch, configuration, cancellationToken);

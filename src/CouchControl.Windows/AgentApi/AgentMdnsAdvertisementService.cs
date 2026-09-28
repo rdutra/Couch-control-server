@@ -10,6 +10,8 @@ namespace CouchControl.Windows.AgentApi;
 public interface IAgentMdnsAdvertisementService : IAsyncDisposable
 {
     Task StartAsync(AgentApiBindingPlan bindingPlan, CancellationToken cancellationToken = default);
+
+    Task UpdateAsync(AgentApiBindingPlan bindingPlan, CancellationToken cancellationToken = default);
 }
 
 public sealed class AgentMdnsAdvertisementService : IAgentMdnsAdvertisementService
@@ -27,6 +29,8 @@ public sealed class AgentMdnsAdvertisementService : IAgentMdnsAdvertisementServi
     private UdpClient? client;
     private Task? receiveTask;
     private MdnsAdvertisement? advertisement;
+    private MdnsAdvertisement? advertisementTemplate;
+    private bool announcementPending;
 
     public AgentMdnsAdvertisementService(
         IAgentConfigurationStore configurationStore,
@@ -38,12 +42,6 @@ public sealed class AgentMdnsAdvertisementService : IAgentMdnsAdvertisementServi
 
     public async Task StartAsync(AgentApiBindingPlan bindingPlan, CancellationToken cancellationToken = default)
     {
-        if (bindingPlan.LanIpv4Addresses.Count == 0)
-        {
-            logger.LogInformation("Skipping mDNS advertisement because no LAN IPv4 address is available.");
-            return;
-        }
-
         lock (lifecycleLock)
         {
             if (client is not null)
@@ -56,20 +54,12 @@ public sealed class AgentMdnsAdvertisementService : IAgentMdnsAdvertisementServi
         var hostName = SanitizeLabel(Dns.GetHostName(), "couchctrl-pc");
         var displayName = DisplayNameForAdvertisement(configuration.AgentName, hostName);
         var instanceName = SanitizeLabel(displayName, "CouchCTRL PC");
-        var selectedAddress = bindingPlan.LanIpv4Addresses
-            .Select(static address => IPAddress.TryParse(address, out var parsed) ? parsed : null)
-            .OfType<IPAddress>()
-            .FirstOrDefault(static address => address.AddressFamily == AddressFamily.InterNetwork);
-        if (selectedAddress is null)
-        {
-            logger.LogInformation("Skipping mDNS advertisement because the selected LAN address is invalid.");
-            return;
-        }
+        var selectedAddress = FirstIpv4Address(bindingPlan);
 
         UdpClient localClient;
         try
         {
-            localClient = CreateClient();
+            localClient = CreateClient(selectedAddress);
         }
         catch (Exception ex) when (ex is SocketException or ObjectDisposedException)
         {
@@ -77,11 +67,11 @@ public sealed class AgentMdnsAdvertisementService : IAgentMdnsAdvertisementServi
             return;
         }
 
-        var localAdvertisement = new MdnsAdvertisement(
+        var localTemplate = new MdnsAdvertisement(
             $"{instanceName}.{ServiceType}",
             $"{hostName}.local.",
             bindingPlan.Port,
-            selectedAddress,
+            selectedAddress ?? IPAddress.Any,
             [
                 "api=/api/v1",
                 "version=1",
@@ -97,24 +87,137 @@ public sealed class AgentMdnsAdvertisementService : IAgentMdnsAdvertisementServi
             }
 
             client = localClient;
-            advertisement = localAdvertisement;
+            advertisementTemplate = localTemplate;
+            advertisement = selectedAddress is null
+                ? null
+                : localTemplate with { Address = selectedAddress };
+            announcementPending = selectedAddress is not null;
             receiveTask = Task.Run(() => ReceiveLoopAsync(localClient, cancellationTokenSource.Token));
         }
 
-        try
+        if (selectedAddress is not null)
         {
-            await SendAnnouncementAsync(localClient, localAdvertisement, cancellationToken);
+            try
+            {
+                await SendAnnouncementAsync(localClient, localTemplate with { Address = selectedAddress }, cancellationToken);
+                lock (lifecycleLock)
+                {
+                    if (ReferenceEquals(client, localClient))
+                    {
+                        announcementPending = false;
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is SocketException or ObjectDisposedException)
+            {
+                logger.LogDebug(ex, "Initial mDNS announcement could not be sent.");
+            }
+
+            logger.LogInformation(
+                "Advertising CouchCTRL agent over mDNS as {InstanceName} at {Address}:{Port}.",
+                localTemplate.InstanceName,
+                selectedAddress,
+                localTemplate.Port);
         }
-        catch (Exception ex) when (ex is SocketException or ObjectDisposedException)
+        else
         {
-            logger.LogDebug(ex, "Initial mDNS announcement could not be sent.");
+            logger.LogInformation("mDNS is waiting for an eligible LAN IPv4 address before advertising the agent.");
+        }
+    }
+
+    public async Task UpdateAsync(AgentApiBindingPlan bindingPlan, CancellationToken cancellationToken = default)
+    {
+        var nextAddress = FirstIpv4Address(bindingPlan);
+        UdpClient? localClient;
+        MdnsAdvertisement? previousAdvertisement;
+        MdnsAdvertisement? nextAdvertisement;
+        bool addressChanged;
+
+        lock (lifecycleLock)
+        {
+            localClient = client;
+            if (localClient is null)
+            {
+                nextAdvertisement = null;
+                previousAdvertisement = null;
+                addressChanged = false;
+            }
+            else
+            {
+                if (advertisementTemplate is null)
+                {
+                    return;
+                }
+
+                previousAdvertisement = advertisement;
+                addressChanged = previousAdvertisement is null
+                    ? nextAddress is not null
+                    : !previousAdvertisement.Address.Equals(nextAddress);
+                if (!addressChanged && !announcementPending)
+                {
+                    return;
+                }
+
+                nextAdvertisement = addressChanged
+                    ? nextAddress is null
+                        ? null
+                        : advertisementTemplate with { Address = nextAddress }
+                    : previousAdvertisement;
+            }
         }
 
-        logger.LogInformation(
-            "Advertising CouchCTRL agent over mDNS as {InstanceName} at {Address}:{Port}.",
-            localAdvertisement.InstanceName,
-            localAdvertisement.Address,
-            localAdvertisement.Port);
+        if (localClient is null)
+        {
+            await StartAsync(bindingPlan, cancellationToken);
+            return;
+        }
+
+        if (addressChanged)
+        {
+            if (previousAdvertisement is not null)
+            {
+                try
+                {
+                    await SendAnnouncementAsync(localClient, previousAdvertisement, cancellationToken, ttlSeconds: 0);
+                }
+                catch (Exception ex) when (ex is SocketException or ObjectDisposedException)
+                {
+                    logger.LogDebug(ex, "Could not withdraw the previous mDNS address.");
+                }
+            }
+
+            ConfigureMulticastInterface(localClient, previousAdvertisement?.Address, nextAddress);
+            lock (lifecycleLock)
+            {
+                if (!ReferenceEquals(client, localClient))
+                {
+                    return;
+                }
+
+                advertisement = nextAdvertisement;
+                announcementPending = nextAdvertisement is not null;
+            }
+        }
+
+        if (nextAdvertisement is not null)
+        {
+            await SendAnnouncementAsync(localClient, nextAdvertisement, cancellationToken);
+            lock (lifecycleLock)
+            {
+                if (ReferenceEquals(client, localClient) && Equals(advertisement, nextAdvertisement))
+                {
+                    announcementPending = false;
+                }
+            }
+            logger.LogInformation(
+                "Updated CouchCTRL mDNS address to {Address}:{Port}.",
+                nextAdvertisement.Address,
+                nextAdvertisement.Port);
+        }
+        else
+        {
+            logger.LogInformation("Withdrew the CouchCTRL mDNS address because no eligible LAN IPv4 address is available.");
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -129,6 +232,8 @@ public sealed class AgentMdnsAdvertisementService : IAgentMdnsAdvertisementServi
             client = null;
             receiveTask = null;
             advertisement = null;
+            advertisementTemplate = null;
+            announcementPending = false;
         }
 
         localClient?.Dispose();
@@ -149,17 +254,69 @@ public sealed class AgentMdnsAdvertisementService : IAgentMdnsAdvertisementServi
         cancellationTokenSource.Dispose();
     }
 
-    private static UdpClient CreateClient()
+    private static UdpClient CreateClient(IPAddress? localAddress)
     {
         var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp)
         {
             ExclusiveAddressUse = false
         };
-        socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-        socket.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.MulticastTimeToLive, 255);
-        socket.Bind(new IPEndPoint(IPAddress.Any, 5353));
-        socket.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.AddMembership, new MulticastOption(MulticastAddress));
-        return new UdpClient { Client = socket };
+        try
+        {
+            socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+            socket.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.MulticastTimeToLive, 255);
+            socket.Bind(new IPEndPoint(IPAddress.Any, 5353));
+            ConfigureMulticastInterface(socket, null, localAddress);
+            return new UdpClient { Client = socket };
+        }
+        catch
+        {
+            socket.Dispose();
+            throw;
+        }
+    }
+
+    private static void ConfigureMulticastInterface(UdpClient client, IPAddress? previousAddress, IPAddress? nextAddress) =>
+        ConfigureMulticastInterface(client.Client, previousAddress, nextAddress);
+
+    private static void ConfigureMulticastInterface(Socket socket, IPAddress? previousAddress, IPAddress? nextAddress)
+    {
+        if (previousAddress?.Equals(nextAddress) == true)
+        {
+            return;
+        }
+
+        if (previousAddress is not null)
+        {
+            try
+            {
+                socket.SetSocketOption(
+                    SocketOptionLevel.IP,
+                    SocketOptionName.DropMembership,
+                    new MulticastOption(MulticastAddress, previousAddress));
+            }
+            catch (SocketException)
+            {
+                // Windows may already have removed the old address and its membership.
+            }
+        }
+
+        if (nextAddress is null)
+        {
+            socket.SetSocketOption(
+                SocketOptionLevel.IP,
+                SocketOptionName.MulticastInterface,
+                IPAddress.Any.GetAddressBytes());
+            return;
+        }
+
+        socket.SetSocketOption(
+            SocketOptionLevel.IP,
+            SocketOptionName.MulticastInterface,
+            nextAddress.GetAddressBytes());
+        socket.SetSocketOption(
+            SocketOptionLevel.IP,
+            SocketOptionName.AddMembership,
+            new MulticastOption(MulticastAddress, nextAddress));
     }
 
     private async Task ReceiveLoopAsync(UdpClient udpClient, CancellationToken cancellationToken)
@@ -212,11 +369,17 @@ public sealed class AgentMdnsAdvertisementService : IAgentMdnsAdvertisementServi
     private static async Task SendAnnouncementAsync(
         UdpClient udpClient,
         MdnsAdvertisement advertisement,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        uint ttlSeconds = MdnsPacketBuilder.TtlSeconds)
     {
-        var response = MdnsPacketBuilder.BuildResponse(advertisement, transactionId: 0);
+        var response = MdnsPacketBuilder.BuildResponse(advertisement, transactionId: 0, ttlSeconds: ttlSeconds);
         await udpClient.SendAsync(response, MulticastEndpoint, cancellationToken);
     }
+
+    private static IPAddress? FirstIpv4Address(AgentApiBindingPlan bindingPlan) => bindingPlan.LanIpv4Addresses
+        .Select(static address => IPAddress.TryParse(address, out var parsed) ? parsed : null)
+        .OfType<IPAddress>()
+        .FirstOrDefault(static address => address.AddressFamily == AddressFamily.InterNetwork);
 
     private static string SanitizeLabel(string? value, string fallback)
     {
@@ -255,7 +418,7 @@ internal static class MdnsPacketBuilder
     private const ushort SrvRecordType = 33;
     private const ushort ARecordType = 1;
     private const ushort InternetClass = 1;
-    private const uint TtlSeconds = 120;
+    internal const uint TtlSeconds = 120;
 
     public static bool QueryMatches(byte[] packet, MdnsAdvertisement advertisement)
     {
@@ -284,7 +447,10 @@ internal static class MdnsPacketBuilder
         return false;
     }
 
-    public static byte[] BuildResponse(MdnsAdvertisement advertisement, ushort transactionId)
+    public static byte[] BuildResponse(
+        MdnsAdvertisement advertisement,
+        ushort transactionId,
+        uint ttlSeconds = TtlSeconds)
     {
         using var stream = new MemoryStream();
         WriteUInt16(stream, transactionId);
@@ -294,10 +460,10 @@ internal static class MdnsPacketBuilder
         WriteUInt16(stream, 0);
         WriteUInt16(stream, 0);
 
-        WriteRecord(stream, AgentMdnsAdvertisementService.ServiceType, PtrRecordType, BuildName(advertisement.InstanceName));
-        WriteRecord(stream, advertisement.InstanceName, SrvRecordType, BuildSrvRecord(advertisement));
-        WriteRecord(stream, advertisement.InstanceName, TxtRecordType, BuildTxtRecord(advertisement.TxtRecords));
-        WriteRecord(stream, advertisement.HostName, ARecordType, advertisement.Address.GetAddressBytes());
+        WriteRecord(stream, AgentMdnsAdvertisementService.ServiceType, PtrRecordType, BuildName(advertisement.InstanceName), ttlSeconds);
+        WriteRecord(stream, advertisement.InstanceName, SrvRecordType, BuildSrvRecord(advertisement), ttlSeconds);
+        WriteRecord(stream, advertisement.InstanceName, TxtRecordType, BuildTxtRecord(advertisement.TxtRecords), ttlSeconds);
+        WriteRecord(stream, advertisement.HostName, ARecordType, advertisement.Address.GetAddressBytes(), ttlSeconds);
 
         return stream.ToArray();
     }
@@ -382,12 +548,12 @@ internal static class MdnsPacketBuilder
         return stream.ToArray();
     }
 
-    private static void WriteRecord(MemoryStream stream, string name, ushort type, byte[] data)
+    private static void WriteRecord(MemoryStream stream, string name, ushort type, byte[] data, uint ttlSeconds)
     {
         WriteName(stream, name);
         WriteUInt16(stream, type);
         WriteUInt16(stream, InternetClass | 0x8000);
-        WriteUInt32(stream, TtlSeconds);
+        WriteUInt32(stream, ttlSeconds);
         WriteUInt16(stream, (ushort)data.Length);
         stream.Write(data, 0, data.Length);
     }

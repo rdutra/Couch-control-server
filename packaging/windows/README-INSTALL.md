@@ -28,7 +28,7 @@ The default install location is:
 
 ## Update
 
-To update, install the newer CouchCTRL Windows Companion package over the existing installation. User configuration, pairing tokens, snapshots, and logs are kept under `%LOCALAPPDATA%\CouchControl`.
+Quit the running CouchCTRL tray agent before updating, then install the newer CouchCTRL Windows Companion package over the existing installation. User configuration, pairing tokens, snapshots, and logs are kept under `%LOCALAPPDATA%\CouchControl`.
 
 For downloads, support, and privacy details:
 

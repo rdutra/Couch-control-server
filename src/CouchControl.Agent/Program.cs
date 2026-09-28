@@ -40,24 +40,20 @@ await AgentApiApplicationExtensions.InitializeAgentApiAsync(app.Services);
 var apiOptions = app.Services.GetRequiredService<AgentApiRuntimeOptionsProvider>();
 var apiHealthState = app.Services.GetRequiredService<IAgentApiHealthState>();
 var mdnsAdvertisementService = app.Services.GetRequiredService<IAgentMdnsAdvertisementService>();
-if (apiOptions.BindingPlan.ListenUrls.Count > 0)
-{
-    foreach (var listenUrl in apiOptions.BindingPlan.ListenUrls)
-    {
-        app.Urls.Add(listenUrl);
-    }
-
-    await app.StartAsync();
-    apiHealthState.MarkListening(apiOptions.BindingPlan.ListenUrls);
-    await mdnsAdvertisementService.StartAsync(apiOptions.BindingPlan);
-}
-else
-{
-    apiHealthState.MarkNotListening(apiOptions.BindingPlan.StatusMessage);
-}
+var networkChangeMonitor = new AgentApiNetworkChangeMonitor(
+    apiOptions,
+    apiHealthState,
+    mdnsAdvertisementService,
+    services.GetRequiredService<ILogger<AgentApiNetworkChangeMonitor>>());
+app.Urls.Add($"http://0.0.0.0:{apiOptions.Port}");
 
 try
 {
+    await app.StartAsync();
+    apiHealthState.MarkListening(apiOptions.BindingPlan.ListenUrls);
+    await mdnsAdvertisementService.StartAsync(apiOptions.BindingPlan);
+    networkChangeMonitor.Start();
+
     var applicationContext = services.GetRequiredService<AgentApplicationContext>();
     applicationContext.StartFirstRunSetupCheck();
     applicationContext.StartStartupRecoveryCheck();
@@ -65,11 +61,9 @@ try
 }
 finally
 {
-    if (app.Urls.Count > 0)
-    {
-        await mdnsAdvertisementService.DisposeAsync();
-        await app.StopAsync();
-    }
+    networkChangeMonitor.Dispose();
+    await mdnsAdvertisementService.DisposeAsync();
+    await app.StopAsync();
 }
 
 static WebApplication CreateApp(string[] args)

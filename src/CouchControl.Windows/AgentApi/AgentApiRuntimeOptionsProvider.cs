@@ -1,5 +1,6 @@
 using System.Linq;
 using CouchControl.Core.Abstractions;
+using CouchControl.Core.Models;
 
 namespace CouchControl.Windows.AgentApi;
 
@@ -36,6 +37,29 @@ public sealed class AgentApiRuntimeOptionsProvider
             "Not loaded.");
 
     public IReadOnlyList<string> AllowedOrigins { get; private set; } = Array.Empty<string>();
+
+    public bool RefreshNetworkBindingPlan()
+    {
+        var configuration = new AgentConfiguration
+        {
+            ApiPort = Port,
+            ApiListeningInterfaceId = ListeningInterfaceId
+        };
+        var refreshedPlan = networkInterfaceProvider.CreateBindingPlan(configuration);
+        var changed = !BindingPlan.ListenUrls.SequenceEqual(
+                refreshedPlan.ListenUrls,
+                StringComparer.OrdinalIgnoreCase) ||
+            !string.Equals(
+                BindingPlan.SelectedInterfaceId,
+                refreshedPlan.SelectedInterfaceId,
+                StringComparison.OrdinalIgnoreCase);
+        if (changed)
+        {
+            BindingPlan = refreshedPlan;
+        }
+
+        return changed;
+    }
 
     public async Task LoadAsync(CancellationToken cancellationToken = default)
     {

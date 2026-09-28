@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.NetworkInformation;
 using System.Buffers.Binary;
 using System.Text;
+using CouchControl.Core.Abstractions;
 using CouchControl.Core.Models;
 using CouchControl.Windows.AgentApi;
 
@@ -139,6 +140,51 @@ public sealed class AgentNetworkTests
     }
 
     [Fact]
+    public async Task RuntimeOptionsProvider_RefreshesTheSelectedInterfaceAfterItsAddressChanges()
+    {
+        var networkSystem = new MutableNetworkInterfaceSystem(
+            [new NetworkAdapterSnapshot(
+                "wifi",
+                "Wi-Fi",
+                "Intel Wireless",
+                PhysicalAddress.Parse("AABBCCDDEEFF"),
+                NetworkInterfaceType.Wireless80211,
+                true,
+                8,
+                [Ipv4("192.168.1.40", "255.255.255.0")])],
+            [new NetworkProfileSnapshot(8, "Wi-Fi", NetworkCategory.Private)]);
+        var provider = new LocalNetworkInterfaceProvider(networkSystem);
+        var configuration = new AgentConfiguration
+        {
+            ApiPort = 47981,
+            ApiListeningInterfaceId = "wifi"
+        };
+        var runtimeOptions = new AgentApiRuntimeOptionsProvider(
+            new FixedConfigurationStore(configuration),
+            provider);
+
+        await runtimeOptions.LoadAsync();
+        networkSystem.Adapters =
+        [
+            new NetworkAdapterSnapshot(
+                "wifi",
+                "Wi-Fi",
+                "Intel Wireless",
+                PhysicalAddress.Parse("AABBCCDDEEFF"),
+                NetworkInterfaceType.Wireless80211,
+                true,
+                8,
+                [Ipv4("192.168.1.75", "255.255.255.0")])
+        ];
+
+        Assert.True(runtimeOptions.RefreshNetworkBindingPlan());
+        Assert.Equal("wifi", runtimeOptions.BindingPlan.SelectedInterfaceId);
+        Assert.Equal(["192.168.1.75"], runtimeOptions.BindingPlan.LanIpv4Addresses);
+        Assert.Equal(["http://192.168.1.75:47981"], runtimeOptions.BindingPlan.ListenUrls);
+        Assert.False(runtimeOptions.RefreshNetworkBindingPlan());
+    }
+
+    [Fact]
     public void FirewallCommandBuilder_GeneratesPrivateTcpRuleCommands()
     {
         var create = FirewallCommandBuilder.BuildCreateCommand("CouchControl Rule", 47981);
@@ -212,6 +258,56 @@ public sealed class AgentNetworkTests
         Assert.True(ContainsSequence(response, [192, 168, 1, 40]));
     }
 
+    [Fact]
+    public void MdnsPacketBuilder_GoodbyeWithdrawsCachedRecordsImmediately()
+    {
+        var advertisement = new MdnsAdvertisement(
+            "Living Room Gaming PC._couchcontrol._tcp.local.",
+            "couch-pc.local.",
+            47981,
+            IPAddress.Parse("192.168.1.40"),
+            ["api=/api/v1", "version=1"]);
+
+        var goodbye = MdnsPacketBuilder.BuildResponse(advertisement, transactionId: 0, ttlSeconds: 0);
+
+        Assert.Equal(4, ReadRecordTtls(goodbye).Count);
+        Assert.All(ReadRecordTtls(goodbye), static ttl => Assert.Equal(0u, ttl));
+    }
+
+    private static IReadOnlyList<uint> ReadRecordTtls(byte[] packet)
+    {
+        var recordCount = BinaryPrimitives.ReadUInt16BigEndian(packet.AsSpan(6, 2));
+        var offset = 12;
+        var ttls = new List<uint>(recordCount);
+        for (var index = 0; index < recordCount; index++)
+        {
+            while (offset < packet.Length)
+            {
+                var labelLength = packet[offset++];
+                if (labelLength == 0)
+                {
+                    break;
+                }
+
+                if ((labelLength & 0xC0) == 0xC0)
+                {
+                    offset++;
+                    break;
+                }
+
+                offset += labelLength;
+            }
+
+            offset += 4;
+            ttls.Add(BinaryPrimitives.ReadUInt32BigEndian(packet.AsSpan(offset, 4)));
+            offset += 4;
+            var dataLength = BinaryPrimitives.ReadUInt16BigEndian(packet.AsSpan(offset, 2));
+            offset += 2 + dataLength;
+        }
+
+        return ttls;
+    }
+
     private sealed class FakeNetworkInterfaceSystem(
         IReadOnlyList<NetworkAdapterSnapshot> adapters,
         IReadOnlyList<NetworkProfileSnapshot> profiles) : INetworkInterfaceSystem
@@ -219,6 +315,28 @@ public sealed class AgentNetworkTests
         public IReadOnlyList<NetworkAdapterSnapshot> GetNetworkAdapters() => adapters;
 
         public IReadOnlyList<NetworkProfileSnapshot> GetNetworkProfiles() => profiles;
+    }
+
+    private sealed class MutableNetworkInterfaceSystem(
+        IReadOnlyList<NetworkAdapterSnapshot> adapters,
+        IReadOnlyList<NetworkProfileSnapshot> profiles) : INetworkInterfaceSystem
+    {
+        public IReadOnlyList<NetworkAdapterSnapshot> Adapters { get; set; } = adapters;
+
+        public IReadOnlyList<NetworkProfileSnapshot> Profiles { get; } = profiles;
+
+        public IReadOnlyList<NetworkAdapterSnapshot> GetNetworkAdapters() => Adapters;
+
+        public IReadOnlyList<NetworkProfileSnapshot> GetNetworkProfiles() => Profiles;
+    }
+
+    private sealed class FixedConfigurationStore(AgentConfiguration configuration) : IAgentConfigurationStore
+    {
+        public Task<AgentConfiguration> LoadAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(configuration);
+
+        public Task SaveAsync(AgentConfiguration configuration, CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
     }
 
     private static NetworkIpv4AddressSnapshot Ipv4(string address, string mask) =>

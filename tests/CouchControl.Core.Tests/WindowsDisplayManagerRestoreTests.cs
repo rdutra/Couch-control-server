@@ -8,7 +8,7 @@ namespace CouchControl.Core.Tests;
 public sealed class WindowsDisplayManagerRestoreTests
 {
     [Fact]
-    public async Task ActivateOnlyAsync_ActivatesInactiveDisplayWithoutExtendingFirst()
+    public async Task ActivateOnlyAsync_ExtendsAndRequeriesBeforeActivatingInactiveDisplay()
     {
         var adapterId = new LUID { HighPart = 1, LowPart = 1 };
         var ultrawidePath = @"\\?\DISPLAY#GBT3406#5&371a1502&0&UID33024#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}";
@@ -48,12 +48,13 @@ public sealed class WindowsDisplayManagerRestoreTests
 
         Assert.True(result.Succeeded);
         Assert.Equal("single_display_device_settings", result.Outcome);
-        Assert.Contains("Attempting explicit single-display activation without requiring the target display to be active", result.Details);
-        Assert.DoesNotContain("DisplaySwitch.exe /extend", result.Details);
+        Assert.Contains("Attempting explicit single-display activation after checking whether the target display is active", result.Details);
+        Assert.Contains("Target display is not active yet; attempting DisplaySwitch.exe /extend before single-display activation", result.Details);
+        Assert.Contains("Confirmed 'SAMSUNG' is active after the extend fallback.", result.Details);
         Assert.Contains("Detaching GS34WQC", result.Details);
         Assert.Contains("Configuring SAMSUNG as primary display", result.Details);
         Assert.Empty(displaySystem.SetDisplayConfigCalls);
-        Assert.Equal(0, displaySystem.DisplaySwitchExtendCallCount);
+        Assert.Equal(1, displaySystem.DisplaySwitchExtendCallCount);
         Assert.Equal(2, displaySystem.ChangeDisplaySettingsExCalls.Count);
         Assert.Equal("DISPLAY1", displaySystem.ChangeDisplaySettingsExCalls[0].DeviceName);
         Assert.Equal("DISPLAY2", displaySystem.ChangeDisplaySettingsExCalls[1].DeviceName);
@@ -63,7 +64,7 @@ public sealed class WindowsDisplayManagerRestoreTests
     }
 
     [Fact]
-    public async Task ActivateOnlyAsync_UsesExtendOnlyAfterNativeActivationVerificationFails()
+    public async Task ActivateOnlyAsync_UsesExtendFallbackAfterActiveTargetVerificationFails()
     {
         var adapterId = new LUID { HighPart = 1, LowPart = 1 };
         var ultrawidePath = @"\\?\DISPLAY#GBT3406#5&371a1502&0&UID33024#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}";
@@ -71,7 +72,7 @@ public sealed class WindowsDisplayManagerRestoreTests
 
         var currentTopology = QueryState.Create(
             CreateDisplay(adapterId, 0, 33024, ultrawidePath, "GS34WQC", isActive: true, width: 3440, height: 1440, positionX: 0, positionY: 0, outputTechnology: DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY.DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EXTERNAL),
-            CreateDisplay(adapterId, 1, 33029, tvPath, "SAMSUNG", isActive: false, width: 3840, height: 2160, positionX: 3440, positionY: 0, outputTechnology: DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY.DISPLAYCONFIG_OUTPUT_TECHNOLOGY_HDMI));
+            CreateDisplay(adapterId, 1, 33029, tvPath, "SAMSUNG", isActive: true, width: 3840, height: 2160, positionX: 3440, positionY: 0, outputTechnology: DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY.DISPLAYCONFIG_OUTPUT_TECHNOLOGY_HDMI));
 
         var displaySystem = new FakeWindowsDisplaySystem(
             currentTopology,
@@ -182,9 +183,10 @@ public sealed class WindowsDisplayManagerRestoreTests
 
         Assert.True(result.Succeeded);
         Assert.Equal("single_display_device_settings_after_extend_fallback", result.Outcome);
+        Assert.Contains("Target display is not active yet; attempting DisplaySwitch.exe /extend before single-display activation", result.Details);
         Assert.Contains("Using activation fallback: DisplaySwitch.exe /extend", result.Details);
         Assert.Contains("Attempting explicit single-display activation after extend fallback", result.Details);
-        Assert.Equal(1, displaySystem.DisplaySwitchExtendCallCount);
+        Assert.Equal(2, displaySystem.DisplaySwitchExtendCallCount);
         Assert.Equal(4, displaySystem.ChangeDisplaySettingsExCalls.Count);
         Assert.Equal(2, displaySystem.CommitDisplaySettingsCallCount);
     }

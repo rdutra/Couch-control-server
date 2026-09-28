@@ -41,6 +41,32 @@ public static class AgentApiApplicationExtensions
 
     public static WebApplication MapCouchControlAgentApi(this WebApplication app)
     {
+        app.Use(async (context, next) =>
+        {
+            var localAddress = context.Connection.LocalIpAddress;
+            if (localAddress is not null && !IPAddress.IsLoopback(localAddress))
+            {
+                if (localAddress.IsIPv4MappedToIPv6)
+                {
+                    localAddress = localAddress.MapToIPv4();
+                }
+
+                var allowedAddresses = context.RequestServices
+                    .GetRequiredService<AgentApiRuntimeOptionsProvider>()
+                    .BindingPlan
+                    .LanIpv4Addresses;
+                if (!allowedAddresses.Any(address =>
+                        IPAddress.TryParse(address, out var parsedAddress) &&
+                        parsedAddress.Equals(localAddress)))
+                {
+                    context.Response.StatusCode = StatusCodes.Status404NotFound;
+                    return;
+                }
+            }
+
+            await next();
+        });
+
         app.UseAgentApiNoStore();
 
         app.MapGet("/api/v1/health", () => Results.Ok(new HealthResponse(true, GetVersion())));
